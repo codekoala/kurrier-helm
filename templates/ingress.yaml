@@ -1,0 +1,55 @@
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := include "kurrier.fullname" . -}}
+{{- $webSvcPort := .Values.web.service.port -}}
+{{- $kongSvcPort := .Values.supabase.kong.service.httpPort -}}
+{{- $studioSvcPort := .Values.supabase.studio.service.port -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "kurrier.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                {{- if eq .service "web" }}
+                name: {{ $fullName }}-web
+                port:
+                  number: {{ $webSvcPort }}
+                {{- else if eq .service "kong" }}
+                name: {{ $fullName }}-kong
+                port:
+                  number: {{ $kongSvcPort }}
+                {{- else if eq .service "studio" }}
+                name: {{ $fullName }}-studio
+                port:
+                  number: {{ $studioSvcPort }}
+                {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

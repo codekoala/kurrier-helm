@@ -1,0 +1,131 @@
+{{- if and .Values.supabase.enabled .Values.supabase.kong.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kurrier.fullname" . }}-kong
+  labels:
+    {{- include "kurrier.kong.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.supabase.kong.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kurrier.kong.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.supabase.kong.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kurrier.kong.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
+      serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      containers:
+        - name: kong
+          image: "{{ .Values.supabase.kong.image.repository }}:{{ .Values.supabase.kong.image.tag }}"
+          imagePullPolicy: {{ .Values.supabase.kong.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - |
+              eval "echo \"$(cat /home/kong/kong.yml)\"" > /home/kong/temp.yml && \
+              /docker-entrypoint.sh kong docker-start
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          env:
+            - name: KONG_DATABASE
+              value: "off"
+            - name: KONG_DECLARATIVE_CONFIG
+              value: "/home/kong/temp.yml"
+            - name: KONG_DNS_ORDER
+              value: "LAST,A,CNAME"
+            - name: KONG_PLUGINS
+              value: "request-transformer,cors,key-auth,acl,basic-auth"
+            - name: KONG_NGINX_PROXY_PROXY_BUFFER_SIZE
+              value: "160k"
+            - name: KONG_NGINX_PROXY_PROXY_BUFFERS
+              value: "64 160k"
+            - name: SUPABASE_ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.jwt.secretName" . }}
+                  key: {{ .Values.kurrier.jwt.secretKeys.anonKey }}
+            - name: SUPABASE_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.jwt.secretName" . }}
+                  key: {{ .Values.kurrier.jwt.secretKeys.serviceRoleKey }}
+            {{- if .Values.supabase.studio.enabled }}
+            - name: DASHBOARD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.fullname" . }}-studio
+                  key: username
+            - name: DASHBOARD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.fullname" . }}-studio
+                  key: password
+            {{- end }}
+          volumeMounts:
+            - name: kong-config
+              mountPath: /home/kong/kong.yml
+              subPath: kong.yml
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.supabase.kong.resources | nindent 12 }}
+      volumes:
+        - name: kong-config
+          configMap:
+            name: {{ include "kurrier.fullname" . }}-kong
+      {{- with .Values.supabase.kong.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.supabase.kong.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.supabase.kong.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kurrier.kong.serviceName" . }}
+  labels:
+    {{- include "kurrier.kong.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.supabase.kong.service.type }}
+  ports:
+    - port: {{ .Values.supabase.kong.service.httpPort }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.supabase.kong.service.httpsPort }}
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "kurrier.kong.selectorLabels" . | nindent 4 }}
+{{- end }}

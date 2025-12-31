@@ -1,0 +1,36 @@
+apiVersion: v2
+name: kurrier
+description: A Helm chart for deploying Kurrier - a modern, self-hosted webmail that integrates with all major ESPs
+type: application
+version: 0.1.0
+appVersion: "1.1.11"
+keywords:
+  - email
+  - webmail
+  - imap
+  - smtp
+  - ses
+  - sendgrid
+  - mailgun
+  - postmark
+  - carddav
+  - caldav
+  - contacts
+  - calendar
+  - self-hosted
+home: https://www.kurrier.org
+sources:
+  - https://github.com/kurrier-org/kurrier
+  - https://github.com/codekoala/kurrier-helm
+maintainers:
+  - name: codekoala
+    url: https://github.com/codekoala
+icon: https://www.kurrier.org/kurrier-logo.png
+dependencies: []
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://www.kurrier.org/docs
+    - name: GitHub
+      url: https://github.com/kurrier-org/kurrier

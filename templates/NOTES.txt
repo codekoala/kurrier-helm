@@ -1,0 +1,148 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named: {{ .Release.Name }}
+
+==========================================================================
+ _  __                _           
+| |/ /               (_)          
+| ' / _   _ _ __ _ __ _  ___ _ __ 
+|  < | | | | '__| '__| |/ _ \ '__|
+| . \| |_| | |  | |  | |  __/ |   
+|_|\_\\__,_|_|  |_|  |_|\___|_|   
+                                  
+Modern, self-hosted webmail for all major ESPs
+==========================================================================
+
+To access Kurrier, you'll need to set up access to the services.
+
+{{- if .Values.ingress.enabled }}
+
+1. Kurrier is available via Ingress at:
+{{- range $host := .Values.ingress.hosts }}
+   - http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+
+{{- else }}
+
+1. Get the Kurrier Web URL by running these commands:
+
+{{- if eq .Values.web.service.type "LoadBalancer" }}
+   NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+   You can watch the status by running:
+   kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "kurrier.web.serviceName" . }}
+
+   export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "kurrier.web.serviceName" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+   echo "Kurrier Web: http://$SERVICE_IP:{{ .Values.web.service.port }}"
+
+{{- else if eq .Values.web.service.type "NodePort" }}
+   export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "kurrier.web.serviceName" . }})
+   export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+   echo "Kurrier Web: http://$NODE_IP:$NODE_PORT"
+
+{{- else if eq .Values.web.service.type "ClusterIP" }}
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "kurrier.web.serviceName" . }} 3000:{{ .Values.web.service.port }}
+   echo "Kurrier Web: http://localhost:3000"
+{{- end }}
+{{- end }}
+
+{{- if and .Values.supabase.enabled .Values.supabase.studio.enabled }}
+
+2. Access Supabase Studio for database management:
+
+{{- if eq .Values.supabase.studio.service.type "ClusterIP" }}
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "kurrier.studio.serviceName" . }} 8000:{{ .Values.supabase.studio.service.port }}
+   echo "Studio: http://localhost:8000"
+{{- end }}
+
+   Login credentials:
+   - Username: {{ .Values.supabase.studio.username }}
+   - Password: (stored in secret {{ include "kurrier.fullname" . }}-studio)
+{{- end }}
+
+{{- if and .Values.supabase.enabled .Values.supabase.kong.enabled }}
+
+3. API Gateway (Kong) is available for Supabase API access:
+
+{{- if eq .Values.supabase.kong.service.type "ClusterIP" }}
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "kurrier.kong.serviceName" . }} 8080:{{ .Values.supabase.kong.service.httpPort }}
+   echo "API Gateway: http://localhost:8080"
+{{- end }}
+{{- end }}
+
+==========================================================================
+IMPORTANT CONFIGURATION NOTES:
+==========================================================================
+
+{{- if not .Values.ingress.enabled }}
+
+⚠️  Ingress is disabled. For production use, enable ingress with TLS.
+    Example:
+    
+    ingress:
+      enabled: true
+      className: nginx
+      annotations:
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+      hosts:
+        - host: kurrier.example.com
+          paths:
+            - path: /
+              pathType: Prefix
+              service: web
+      tls:
+        - secretName: kurrier-tls
+          hosts:
+            - kurrier.example.com
+{{- end }}
+
+{{- if not .Values.kurrier.jwt.existingSecret }}
+
+⚠️  JWT secrets are configured via values. For production, use existingSecret:
+    
+    kurrier:
+      jwt:
+        existingSecret: my-kurrier-jwt-secret
+{{- end }}
+
+{{- if and .Values.supabase.enabled .Values.supabase.db.enabled }}
+{{- if not .Values.supabase.db.existingSecret }}
+
+⚠️  PostgreSQL password is configured via values. For production, use existingSecret:
+
+    supabase:
+      db:
+        existingSecret: my-postgres-secret
+{{- end }}
+{{- end }}
+
+{{- if .Values.valkey.enabled }}
+{{- if not .Values.valkey.existingSecret }}
+
+⚠️  Valkey password is configured via values. For production, use existingSecret:
+
+    valkey:
+      existingSecret: my-valkey-secret
+{{- end }}
+{{- end }}
+
+==========================================================================
+USEFUL COMMANDS:
+==========================================================================
+
+# Check pod status
+kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+# View logs
+kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=web
+
+# Get all resources
+kubectl get all -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+==========================================================================
+
+For more information, visit:
+- Documentation: https://www.kurrier.org/docs
+- GitHub: https://github.com/kurrier-org/kurrier
+- Helm Chart: https://github.com/codekoala/kurrier-helm
+
+Happy emailing! 📧

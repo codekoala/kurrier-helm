@@ -1,0 +1,129 @@
+{{- if and .Values.dav.enabled .Values.dav.radicale.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kurrier.fullname" . }}-radicale
+  labels:
+    {{- include "kurrier.radicale.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "kurrier.radicale.serviceName" . }}
+  replicas: {{ .Values.dav.radicale.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kurrier.radicale.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.dav.radicale.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "kurrier.radicale.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
+      serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      containers:
+        - name: radicale
+          image: "{{ .Values.dav.radicale.image.repository }}:{{ .Values.dav.radicale.image.tag }}"
+          imagePullPolicy: {{ .Values.dav.radicale.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5232
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.dav.radicale.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kurrier.fullname" . }}-radicale
+      {{- with .Values.dav.radicale.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dav.radicale.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dav.radicale.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.dav.radicale.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.dav.radicale.persistence.accessModes | nindent 10 }}
+        {{- if or .Values.global.storageClass .Values.dav.radicale.persistence.storageClass }}
+        storageClassName: {{ .Values.dav.radicale.persistence.storageClass | default .Values.global.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.dav.radicale.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kurrier.radicale.serviceName" . }}
+  labels:
+    {{- include "kurrier.radicale.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.dav.radicale.service.type }}
+  ports:
+    - port: {{ .Values.dav.radicale.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "kurrier.radicale.selectorLabels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kurrier.fullname" . }}-radicale
+  labels:
+    {{- include "kurrier.radicale.labels" . | nindent 4 }}
+data:
+  config: |
+    [server]
+    hosts = 0.0.0.0:5232
+    max_connections = 20
+    max_content_length = 100000000
+    timeout = 30
+    
+    [auth]
+    type = none
+    
+    [storage]
+    filesystem_folder = /data/collections
+    
+    [rights]
+    type = owner_only
+    
+    [logging]
+    level = info
+    mask_passwords = true
+{{- end }}

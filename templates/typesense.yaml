@@ -1,0 +1,107 @@
+{{- if .Values.typesense.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kurrier.fullname" . }}-typesense
+  labels:
+    {{- include "kurrier.typesense.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "kurrier.fullname" . }}-typesense
+  replicas: {{ .Values.typesense.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kurrier.typesense.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+        {{- with .Values.typesense.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kurrier.typesense.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
+      serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      containers:
+        - name: typesense
+          image: "{{ .Values.typesense.image.repository }}:{{ .Values.typesense.image.tag }}"
+          imagePullPolicy: {{ .Values.typesense.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8108
+              protocol: TCP
+          args:
+            - --data-dir=/data
+            - --api-key=$(TYPESENSE_API_KEY)
+            - --enable-cors
+          env:
+            - name: TYPESENSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.typesense.secretName" . }}
+                  key: {{ .Values.typesense.secretKey }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.typesense.resources | nindent 12 }}
+      {{- with .Values.typesense.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.typesense.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.typesense.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.typesense.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.typesense.persistence.accessModes | nindent 10 }}
+        {{- if or .Values.global.storageClass .Values.typesense.persistence.storageClass }}
+        storageClassName: {{ .Values.typesense.persistence.storageClass | default .Values.global.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.typesense.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kurrier.typesense.host" . }}
+  labels:
+    {{- include "kurrier.typesense.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.typesense.service.type }}
+  ports:
+    - port: {{ .Values.typesense.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "kurrier.typesense.selectorLabels" . | nindent 4 }}
+{{- end }}

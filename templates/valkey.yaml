@@ -1,0 +1,148 @@
+{{- if .Values.valkey.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kurrier.fullname" . }}-valkey
+  labels:
+    {{- include "kurrier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  serviceName: {{ include "kurrier.fullname" . }}-valkey
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kurrier.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: valkey
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ .Values.valkey.password | sha256sum }}
+        {{- with .Values.valkey.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kurrier.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: valkey
+    spec:
+      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
+      serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: valkey
+          image: "{{ .Values.valkey.image.repository }}:{{ .Values.valkey.image.tag }}"
+          imagePullPolicy: {{ .Values.valkey.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - valkey-server
+          args:
+            - --requirepass
+            - $(VALKEY_PASSWORD)
+            - --appendonly
+            - "yes"
+            - --dir
+            - /data
+          ports:
+            - name: valkey
+              containerPort: 6379
+              protocol: TCP
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.valkey.secretName" . }}
+                  key: {{ .Values.valkey.secretKey }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - valkey-cli -a $VALKEY_PASSWORD ping | grep -q PONG
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - valkey-cli -a $VALKEY_PASSWORD ping | grep -q PONG
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.valkey.resources | nindent 12 }}
+      {{- with .Values.valkey.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.valkey.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.valkey.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.valkey.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.valkey.persistence.accessModes | nindent 10 }}
+        {{- if or .Values.global.storageClass .Values.valkey.persistence.storageClass }}
+        storageClassName: {{ .Values.valkey.persistence.storageClass | default .Values.global.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.valkey.persistence.size }}
+  {{- else }}
+      volumes:
+        - name: data
+          emptyDir: {}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kurrier.fullname" . }}-valkey
+  labels:
+    {{- include "kurrier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  type: {{ .Values.valkey.service.type }}
+  ports:
+    - port: {{ .Values.valkey.service.port }}
+      targetPort: valkey
+      protocol: TCP
+      name: valkey
+  selector:
+    {{- include "kurrier.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+---
+{{- if not .Values.valkey.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kurrier.fullname" . }}-valkey
+  labels:
+    {{- include "kurrier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+type: Opaque
+stringData:
+  valkey-password: {{ .Values.valkey.password | quote }}
+{{- end }}
+{{- end }}

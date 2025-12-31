@@ -1,0 +1,227 @@
+# Production installation values
+# This configuration is suitable for production deployments
+# Includes HA, security best practices, and proper resource allocation
+
+kurrier:
+  webUrl: "https://mail.example.com"
+  apiUrl: "https://mail.example.com/api"
+  jwt:
+    # Use existing secret containing jwt-secret, anon-key, service-role-key
+    existingSecret: kurrier-jwt-secrets
+  vault:
+    existingSecret: kurrier-vault-secret
+  rls:
+    existingSecret: kurrier-rls-secret
+
+# Web Dashboard - High Availability
+web:
+  replicaCount: 3
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: web
+            topologyKey: kubernetes.io/hostname
+
+# Worker - High Availability
+worker:
+  replicaCount: 3
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: worker
+            topologyKey: kubernetes.io/hostname
+
+# Supabase Configuration
+supabase:
+  kong:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+
+  auth:
+    replicaCount: 2
+    siteUrl: "https://mail.example.com"
+    externalUrl: "https://mail.example.com"
+    mailer:
+      enabled: true
+      host: "smtp.example.com"
+      port: 587
+      user: "noreply@example.com"
+      password: ""  # Set via secret in production
+      fromEmail: "noreply@example.com"
+      fromName: "Kurrier Mail"
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+  rest:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+  realtime:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 200m
+        memory: 512Mi
+
+  storage:
+    backend: s3
+    s3:
+      bucket: "kurrier-storage"
+      endpoint: "https://s3.amazonaws.com"
+      region: "us-east-1"
+      # Set credentials via secret
+      accessKeyId: ""
+      secretAccessKey: ""
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+  studio:
+    enabled: true
+    # Use existing secret for studio credentials
+    username: "admin"
+    password: ""  # Set via secret
+
+# PostgreSQL - Use managed database in production
+postgresql:
+  enabled: false
+
+externalPostgresql:
+  enabled: true
+  host: "kurrier-postgres.example.rds.amazonaws.com"
+  port: 5432
+  database: "kurrier"
+  username: "kurrier"
+  existingSecret: kurrier-postgres-secret
+
+# Valkey - Use managed Redis/Valkey in production
+valkey:
+  enabled: false
+
+externalRedis:
+  enabled: true
+  host: "kurrier-redis.example.cache.amazonaws.com"
+  port: 6379
+  existingSecret: kurrier-redis-secret
+  tls:
+    enabled: true
+
+# Typesense
+typesense:
+  replicaCount: 3
+  existingSecret: kurrier-typesense-secret
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: "fast-ssd"
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# DAV Services
+dav:
+  radicale:
+    replicaCount: 2
+    persistence:
+      size: 20Gi
+      storageClass: "standard"
+
+# Ingress with TLS
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/websocket-services: "kurrier-realtime"
+  hosts:
+    - host: mail.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: web
+        - path: /auth
+          pathType: Prefix
+          service: kong
+        - path: /rest
+          pathType: Prefix
+          service: kong
+        - path: /realtime
+          pathType: Prefix
+          service: kong
+        - path: /storage
+          pathType: Prefix
+          service: kong
+    - host: studio.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: studio
+  tls:
+    - secretName: kurrier-tls
+      hosts:
+        - mail.example.com
+    - secretName: kurrier-studio-tls
+      hosts:
+        - studio.example.com
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Network Policies
+networkPolicy:
+  enabled: true

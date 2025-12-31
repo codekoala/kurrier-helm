@@ -1,0 +1,48 @@
+# External Database Configuration
+# Use this when connecting to existing PostgreSQL and Redis instances
+
+kurrier:
+  webUrl: "https://mail.example.com"
+  jwt:
+    existingSecret: kurrier-jwt-secrets
+
+# Disable embedded PostgreSQL
+postgresql:
+  enabled: false
+
+# Configure external PostgreSQL
+externalPostgresql:
+  enabled: true
+  host: "postgres.example.com"
+  port: 5432
+  database: "kurrier"
+  username: "kurrier_user"
+  # Option 1: Password in values (not recommended for production)
+  # password: "your-password"
+  # Option 2: Use existing secret (recommended)
+  existingSecret: "my-postgres-secret"
+  secretKey: "postgresql-password"
+
+# Disable embedded Redis
+redis:
+  enabled: false
+
+# Configure external Redis
+externalRedis:
+  enabled: true
+  host: "redis.example.com"
+  port: 6379
+  # Option 1: Password in values (not recommended for production)
+  # password: "your-password"
+  # Option 2: Use existing secret (recommended)
+  existingSecret: "my-redis-secret"
+  secretKey: "redis-password"
+  # Enable TLS if your Redis requires it
+  tls:
+    enabled: false
+
+# Example: Creating secrets before installation
+# kubectl create secret generic my-postgres-secret \
+#   --from-literal=postgresql-password='your-secure-password'
+# kubectl create secret generic my-redis-secret \
+#   --from-literal=redis-password='your-secure-password'

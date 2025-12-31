@@ -1,0 +1,49 @@
+# Minimal installation values
+# This configuration deploys Kurrier with minimal resources
+# Suitable for testing and development
+
+kurrier:
+  webUrl: "http://localhost:3000"
+
+# Disable Studio (database admin) for minimal setup
+supabase:
+  studio:
+    enabled: false
+
+# Reduce resource requirements
+web:
+  resources:
+    limits:
+      cpu: 250m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+worker:
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# Smaller storage
+postgresql:
+  primary:
+    persistence:
+      size: 5Gi
+
+valkey:
+  persistence:
+    size: 2Gi
+
+typesense:
+  persistence:
+    size: 2Gi
+
+dav:
+  radicale:
+    persistence:
+      size: 1Gi

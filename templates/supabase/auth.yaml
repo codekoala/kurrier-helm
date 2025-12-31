@@ -1,0 +1,134 @@
+{{- if and .Values.supabase.enabled .Values.supabase.auth.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kurrier.fullname" . }}-auth
+  labels:
+    {{- include "kurrier.auth.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.supabase.auth.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kurrier.auth.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+        {{- with .Values.supabase.auth.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kurrier.auth.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
+      serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      containers:
+        - name: auth
+          image: "{{ .Values.supabase.auth.image.repository }}:{{ .Values.supabase.auth.image.tag }}"
+          imagePullPolicy: {{ .Values.supabase.auth.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9999
+              protocol: TCP
+          env:
+            - name: GOTRUE_API_HOST
+              value: "0.0.0.0"
+            - name: GOTRUE_API_PORT
+              value: "9999"
+            - name: API_EXTERNAL_URL
+              value: {{ .Values.supabase.auth.externalUrl | default .Values.kurrier.webUrl | quote }}
+            - name: GOTRUE_SITE_URL
+              value: {{ .Values.supabase.auth.siteUrl | quote }}
+            - name: GOTRUE_URI_ALLOW_LIST
+              value: {{ .Values.supabase.auth.additionalRedirectUrls | quote }}
+            - name: GOTRUE_DISABLE_SIGNUP
+              value: {{ .Values.supabase.auth.disableSignup | quote }}
+            - name: GOTRUE_JWT_ADMIN_ROLES
+              value: "service_role"
+            - name: GOTRUE_JWT_AUD
+              value: "authenticated"
+            - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
+              value: "authenticated"
+            - name: GOTRUE_JWT_EXP
+              value: {{ .Values.supabase.auth.jwtExpiry | quote }}
+            - name: GOTRUE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.jwt.secretName" . }}
+                  key: {{ .Values.kurrier.jwt.secretKeys.jwtSecret }}
+            - name: GOTRUE_DB_DRIVER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.postgresql.secretName" . }}
+                  key: {{ include "kurrier.postgresql.secretKey" . }}
+            - name: GOTRUE_DB_DATABASE_URL
+              value: "postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}"
+            - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED
+              value: {{ .Values.supabase.auth.enableAnonymousUsers | quote }}
+            {{- if .Values.supabase.auth.mailer.enabled }}
+            - name: GOTRUE_SMTP_HOST
+              value: {{ .Values.supabase.auth.mailer.host | quote }}
+            - name: GOTRUE_SMTP_PORT
+              value: {{ .Values.supabase.auth.mailer.port | quote }}
+            - name: GOTRUE_SMTP_USER
+              value: {{ .Values.supabase.auth.mailer.user | quote }}
+            - name: GOTRUE_SMTP_PASS
+              value: {{ .Values.supabase.auth.mailer.password | quote }}
+            - name: GOTRUE_SMTP_ADMIN_EMAIL
+              value: {{ .Values.supabase.auth.mailer.fromEmail | quote }}
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: "false"
+            {{- else }}
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: "true"
+            {{- end }}
+            - name: GOTRUE_RATE_LIMIT_EMAIL_SENT
+              value: "100"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.supabase.auth.resources | nindent 12 }}
+      {{- with .Values.supabase.auth.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.supabase.auth.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.supabase.auth.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kurrier.auth.serviceName" . }}
+  labels:
+    {{- include "kurrier.auth.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.supabase.auth.service.type }}
+  ports:
+    - port: {{ .Values.supabase.auth.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "kurrier.auth.selectorLabels" . | nindent 4 }}
+{{- end }}

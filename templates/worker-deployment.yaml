@@ -1,0 +1,115 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kurrier.fullname" . }}-worker
+  labels:
+    {{- include "kurrier.worker.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kurrier.worker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
+        {{- with .Values.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kurrier.worker.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" .Values.worker.imagePullSecrets) | nindent 6 }}
+      serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.worker.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          securityContext:
+            {{- toYaml .Values.worker.securityContext | nindent 12 }}
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "kurrier.fullname" . }}-config
+          env:
+            # PostgreSQL
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.postgresql.secretName" . }}
+                  key: {{ include "kurrier.postgresql.secretKey" . }}
+            - name: DATABASE_URL
+              value: "postgres://{{ include "kurrier.postgresql.username" . }}:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}"
+            # Redis
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.redis.secretName" . }}
+                  key: {{ include "kurrier.redis.secretKey" . }}
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ include "kurrier.redis.host" . }}:{{ include "kurrier.redis.port" . }}"
+            # Typesense
+            {{- if .Values.typesense.enabled }}
+            - name: TYPESENSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.typesense.secretName" . }}
+                  key: {{ .Values.typesense.secretKey }}
+            {{- end }}
+            # JWT
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.jwt.secretName" . }}
+                  key: {{ .Values.kurrier.jwt.secretKeys.jwtSecret }}
+            - name: ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.jwt.secretName" . }}
+                  key: {{ .Values.kurrier.jwt.secretKeys.anonKey }}
+            - name: SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.jwt.secretName" . }}
+                  key: {{ .Values.kurrier.jwt.secretKeys.serviceRoleKey }}
+            # Vault
+            - name: VAULT_ENC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.vault.secretName" . }}
+                  key: {{ .Values.kurrier.vault.secretKey }}
+            # RLS
+            - name: RLS_CLIENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.rls.secretName" . }}
+                  key: {{ .Values.kurrier.rls.secretKey }}
+            {{- with .Values.worker.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.worker.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.worker.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

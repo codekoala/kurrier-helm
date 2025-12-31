@@ -1,0 +1,19 @@
+# Helm
+charts/
+Chart.lock
+*.tgz
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit)
+secrets.yaml
+*-secrets.yaml
