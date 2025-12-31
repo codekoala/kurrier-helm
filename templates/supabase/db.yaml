@@ -25,6 +25,15 @@ spec:
     spec:
       {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
       serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 999
+      initContainers:
+        - name: init-permissions
+          image: busybox:latest
+          command: ['sh', '-c', 'mkdir -p /var/lib/postgresql/data/pgdata && chown -R 999:999 /var/lib/postgresql/data']
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
       containers:
         - name: postgres
           image: "{{ .Values.supabase.db.image.repository }}:{{ .Values.supabase.db.image.tag }}"
