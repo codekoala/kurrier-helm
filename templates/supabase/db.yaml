@@ -167,9 +167,12 @@ metadata:
     app.kubernetes.io/component: db
 data:
   # Full Supabase role and schema initialization
-  # The supabase/postgres image is a generic postgres with extensions
-  # We need to create all the Supabase roles ourselves
-  00-supabase-init.sh: |
+  # The supabase/postgres image creates auth/storage schemas with tables that are
+  # incompatible with GoTrue's migrations. We need to:
+  # 1. Create all the Supabase roles the image doesn't create
+  # 2. Drop the auth/storage schemas so GoTrue and Storage can create them fresh via migrations
+  # Use zz- prefix to ensure this runs AFTER any image-provided init scripts
+  zz-supabase-init.sh: |
     #!/bin/bash
     set -e
     echo "Setting up Supabase roles and schemas..."
@@ -218,9 +221,15 @@ data:
       GRANT supabase_storage_admin TO postgres;
       GRANT supabase_functions_admin TO postgres;
 
-      -- Create schemas
-      CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;
-      CREATE SCHEMA IF NOT EXISTS storage AUTHORIZATION supabase_storage_admin;
+      -- Drop and recreate auth/storage schemas to allow GoTrue and Storage to
+      -- run their own migrations. The supabase/postgres image creates incompatible
+      -- schema objects that break GoTrue's migration assumptions.
+      DROP SCHEMA IF EXISTS auth CASCADE;
+      DROP SCHEMA IF EXISTS storage CASCADE;
+
+      -- Create schemas with correct ownership
+      CREATE SCHEMA auth AUTHORIZATION supabase_auth_admin;
+      CREATE SCHEMA storage AUTHORIZATION supabase_storage_admin;
       CREATE SCHEMA IF NOT EXISTS _realtime;
       CREATE SCHEMA IF NOT EXISTS _supabase;
 
