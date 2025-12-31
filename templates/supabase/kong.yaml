@@ -30,7 +30,9 @@ spec:
             - bash
             - -c
             - |
-              envsubst < /home/kong/kong.yml > /home/kong/temp.yml && \
+              sed -e "s/\${SUPABASE_ANON_KEY}/${SUPABASE_ANON_KEY}/g" \
+                  -e "s/\${SUPABASE_SERVICE_KEY}/${SUPABASE_SERVICE_KEY}/g" \
+                  /home/kong/kong.yml > /home/kong/temp.yml && \
               /docker-entrypoint.sh kong docker-start
           ports:
             - name: http
