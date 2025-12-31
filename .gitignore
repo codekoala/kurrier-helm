@@ -14,6 +14,6 @@ Chart.lock
 .DS_Store
 Thumbs.db
 
-# Secrets (never commit)
-secrets.yaml
+# Secrets (never commit actual secrets, but templates/secrets.yaml is a Helm template)
+!templates/secrets.yaml
 *-secrets.yaml
