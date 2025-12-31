@@ -240,6 +240,10 @@ data:
       GRANT ALL ON SCHEMA storage TO supabase_storage_admin, supabase_admin, postgres;
       GRANT ALL ON SCHEMA _realtime TO supabase_admin, postgres;
 
+      -- Grant CREATE on database so services can create schemas if needed
+      -- (Storage service tries to CREATE SCHEMA IF NOT EXISTS)
+      GRANT CREATE ON DATABASE postgres TO supabase_auth_admin, supabase_storage_admin;
+
       -- Configure JWT settings
       ALTER DATABASE postgres SET "app.settings.jwt_secret" TO '$JWT_SECRET';
       ALTER DATABASE postgres SET "app.settings.jwt_exp" TO '$JWT_EXP';
