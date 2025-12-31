@@ -412,6 +412,14 @@ dav:
     nodeSelector: {}
     tolerations: []
     affinity: {}
+  # -- Worker DAV data persistence (sqlite database for DAV sync)
+  worker:
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
 
 # -- Valkey (Redis-compatible) cache
 valkey:
