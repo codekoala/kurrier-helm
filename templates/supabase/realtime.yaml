@@ -69,6 +69,8 @@ spec:
               value: "false"
             - name: DNS_NODES
               value: "''"
+            - name: RLIMIT_NOFILE
+              value: "1048576"
           livenessProbe:
             httpGet:
               path: /

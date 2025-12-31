@@ -91,6 +91,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "kurrier.rls.secretName" . }}
                   key: {{ .Values.kurrier.rls.secretKey }}
+            - name: DATABASE_RLS_URL
+              value: "postgres://authenticator:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}"
+            # Search
+            - name: SEARCH_REBUILD_ON_BOOT
+              value: "false"
             {{- with .Values.worker.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

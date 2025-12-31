@@ -30,7 +30,7 @@ spec:
             - bash
             - -c
             - |
-              eval "echo \"$(cat /home/kong/kong.yml)\"" > /home/kong/temp.yml && \
+              envsubst < /home/kong/kong.yml > /home/kong/temp.yml && \
               /docker-entrypoint.sh kong docker-start
           ports:
             - name: http
