@@ -183,6 +183,12 @@ data:
       -- Create required Supabase roles with LOGIN and password for admin roles
       DO \$\$
       BEGIN
+        -- Create postgres role (needed by GoTrue auth migrations)
+        -- This is a superuser role that the auth service expects to exist
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'postgres') THEN
+          CREATE ROLE postgres SUPERUSER LOGIN NOINHERIT PASSWORD '$POSTGRES_PASSWORD';
+        END IF;
+
         -- Non-login roles (for RLS policies)
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'anon') THEN
           CREATE ROLE anon NOLOGIN NOINHERIT;
@@ -220,6 +226,13 @@ data:
       GRANT service_role TO supabase_admin;
       GRANT supabase_auth_admin TO supabase_admin;
       GRANT supabase_storage_admin TO supabase_admin;
+
+      -- Grant roles to postgres (needed by auth migrations)
+      GRANT anon TO postgres;
+      GRANT authenticated TO postgres;
+      GRANT service_role TO postgres;
+      GRANT supabase_auth_admin TO postgres;
+      GRANT supabase_storage_admin TO postgres;
 
       -- Create schemas
       CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;
