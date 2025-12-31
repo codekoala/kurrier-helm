@@ -54,6 +54,10 @@ spec:
               value: "160k"
             - name: KONG_NGINX_PROXY_PROXY_BUFFERS
               value: "64 160k"
+            {{- if .Values.supabase.kong.workerProcesses }}
+            - name: KONG_NGINX_WORKER_PROCESSES
+              value: {{ .Values.supabase.kong.workerProcesses | quote }}
+            {{- end }}
             - name: SUPABASE_ANON_KEY
               valueFrom:
                 secretKeyRef:

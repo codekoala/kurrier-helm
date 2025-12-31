@@ -160,10 +160,12 @@ supabase:
       type: ClusterIP
       httpPort: 8000
       httpsPort: 8443
+    # -- Number of nginx worker processes (default auto, set lower to reduce memory)
+    workerProcesses: "2"
     resources:
       limits:
         cpu: 1000m
-        memory: 1Gi
+        memory: 2Gi
       requests:
         cpu: 250m
         memory: 512Mi
