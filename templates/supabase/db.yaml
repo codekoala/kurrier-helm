@@ -166,89 +166,58 @@ metadata:
     {{- include "kurrier.labels" . | nindent 4 }}
     app.kubernetes.io/component: db
 data:
-  # Supabase roles and schema initialization
-  # Note: supabase_admin is the superuser created by the image (POSTGRES_USER)
-  # The POSTGRES_PASSWORD env var is available during init script execution
-  00-init-scripts.sh: |
+  # Post-init script to set passwords and configure JWT
+  # The supabase/postgres image handles the main init, we just customize
+  # This runs AFTER the image's built-in init scripts (numbered 99- to run last)
+  99-custom-init.sh: |
     #!/bin/bash
     set -e
-    # Create SQL with actual password substituted
-    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-      -- Enable required extensions
-      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-      CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-      CREATE EXTENSION IF NOT EXISTS "pgjwt";
-      CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
+    echo "Running custom Kurrier init script..."
 
-      -- Create required Supabase roles with LOGIN and password for admin roles
+    # Set passwords for Supabase service roles
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+      -- Set passwords for Supabase service roles (created by image)
       DO \$\$
       BEGIN
-        -- Create postgres role (needed by GoTrue auth migrations)
-        -- This is a superuser role that the auth service expects to exist
+        -- Update passwords for existing roles
+        EXECUTE format('ALTER USER authenticator WITH PASSWORD %L', '$POSTGRES_PASSWORD');
+        EXECUTE format('ALTER USER supabase_auth_admin WITH PASSWORD %L', '$POSTGRES_PASSWORD');
+        EXECUTE format('ALTER USER supabase_storage_admin WITH PASSWORD %L', '$POSTGRES_PASSWORD');
+      EXCEPTION WHEN undefined_object THEN
+        RAISE NOTICE 'Some roles do not exist yet, will be created by image';
+      END \$\$;
+
+      -- Create postgres role if it doesn't exist (needed by GoTrue migrations)
+      DO \$\$
+      BEGIN
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'postgres') THEN
-          CREATE ROLE postgres SUPERUSER LOGIN NOINHERIT PASSWORD '$POSTGRES_PASSWORD';
+          EXECUTE format('CREATE ROLE postgres SUPERUSER LOGIN PASSWORD %L', '$POSTGRES_PASSWORD');
+        ELSE
+          EXECUTE format('ALTER USER postgres WITH PASSWORD %L', '$POSTGRES_PASSWORD');
         END IF;
+      END \$\$;
 
-        -- Non-login roles (for RLS policies)
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'anon') THEN
-          CREATE ROLE anon NOLOGIN NOINHERIT;
-        END IF;
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'authenticated') THEN
-          CREATE ROLE authenticated NOLOGIN NOINHERIT;
-        END IF;
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'service_role') THEN
-          CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS;
-        END IF;
+      -- Grant roles to postgres for auth migrations (ignore errors if roles don't exist)
+      DO \$\$
+      BEGIN
+        GRANT anon TO postgres;
+        GRANT authenticated TO postgres;
+        GRANT service_role TO postgres;
+        GRANT supabase_auth_admin TO postgres;
+        GRANT supabase_storage_admin TO postgres;
+      EXCEPTION WHEN undefined_object THEN
+        RAISE NOTICE 'Some roles do not exist yet';
+      END \$\$;
 
-        -- Login roles for Supabase services
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'supabase_auth_admin') THEN
-          CREATE ROLE supabase_auth_admin LOGIN NOINHERIT BYPASSRLS PASSWORD '$POSTGRES_PASSWORD';
-        END IF;
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'supabase_storage_admin') THEN
-          CREATE ROLE supabase_storage_admin LOGIN NOINHERIT BYPASSRLS PASSWORD '$POSTGRES_PASSWORD';
-        END IF;
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'authenticator') THEN
-          CREATE ROLE authenticator NOINHERIT LOGIN PASSWORD '$POSTGRES_PASSWORD';
-        END IF;
-      END
-      \$\$;
+      -- Configure JWT settings
+      ALTER DATABASE postgres SET "app.settings.jwt_secret" TO '$JWT_SECRET';
+      ALTER DATABASE postgres SET "app.settings.jwt_exp" TO '$JWT_EXP';
 
-      -- Grant role memberships
-      GRANT anon TO authenticator;
-      GRANT authenticated TO authenticator;
-      GRANT service_role TO authenticator;
-      GRANT supabase_auth_admin TO authenticator;
-      GRANT supabase_storage_admin TO authenticator;
-
-      -- Grant roles to superuser (supabase_admin)
-      GRANT anon TO supabase_admin;
-      GRANT authenticated TO supabase_admin;
-      GRANT service_role TO supabase_admin;
-      GRANT supabase_auth_admin TO supabase_admin;
-      GRANT supabase_storage_admin TO supabase_admin;
-
-      -- Grant roles to postgres (needed by auth migrations)
-      GRANT anon TO postgres;
-      GRANT authenticated TO postgres;
-      GRANT service_role TO postgres;
-      GRANT supabase_auth_admin TO postgres;
-      GRANT supabase_storage_admin TO postgres;
-
-      -- Create schemas
-      CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;
-      CREATE SCHEMA IF NOT EXISTS storage AUTHORIZATION supabase_storage_admin;
+      -- Create realtime schema if not exists
       CREATE SCHEMA IF NOT EXISTS _realtime;
-
-      -- Grant schema usage
-      GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-      GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
-      GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
-
-      -- Grant all on public schema to service roles
-      GRANT ALL ON SCHEMA public TO supabase_auth_admin, supabase_storage_admin;
-      GRANT ALL ON SCHEMA auth TO supabase_auth_admin;
-      GRANT ALL ON SCHEMA storage TO supabase_storage_admin;
     EOSQL
+
+    echo "Custom Kurrier init complete."
 ---
 {{- if and (not .Values.supabase.db.existingSecret) }}
 apiVersion: v1
