@@ -54,7 +54,7 @@ spec:
                   name: {{ include "kurrier.postgresql.secretName" . }}
                   key: {{ include "kurrier.postgresql.secretKey" . }}
             - name: DATABASE_URL
-              value: "postgres://supabase_storage_admin:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}"
+              value: "postgres://supabase_storage_admin:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}?search_path=storage"
             - name: FILE_SIZE_LIMIT
               value: "52428800"
             - name: STORAGE_BACKEND

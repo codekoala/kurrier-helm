@@ -65,7 +65,7 @@ spec:
                   name: {{ include "kurrier.postgresql.secretName" . }}
                   key: {{ include "kurrier.postgresql.secretKey" . }}
             - name: GOTRUE_DB_DATABASE_URL
-              value: "postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}"
+              value: "postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}?search_path=auth"
             - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
               value: "true"
             - name: GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED
