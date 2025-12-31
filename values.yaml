@@ -458,9 +458,19 @@ externalRedis:
 
 # -- Kurrier-specific configuration
 kurrier:
+  # -- Public URL for the Kurrier web dashboard (used by browser)
   webUrl: "http://localhost:3000"
+  # -- Internal API URL (backend-to-backend communication)
   apiUrl: "http://localhost:3001"
+  # -- Public API URL (used by browser to reach Supabase API via Kong)
+  # This must be reachable from the browser - typically the same as webUrl
+  # when API paths like /auth/v1, /rest/v1, etc. are on the same host
+  apiPublicUrl: "http://localhost:3000"
   localTunnelUrl: ""
+  # -- Skip TLS certificate verification for internal API calls
+  # Enable this when using a private CA (like step-ca) that Node.js doesn't trust
+  # WARNING: Only use in development/internal environments, not production
+  skipTlsVerify: false
 
   jwt:
     secret: "your-super-secret-jwt-token-with-at-least-32-characters-long"
@@ -483,6 +493,8 @@ kurrier:
     secretKey: "rls-client-password"
 
 # -- Ingress configuration (traditional Kubernetes Ingress)
+# Note: Supabase API paths use /v1 suffixes to avoid conflicts with web UI routes
+# (e.g., /auth/v1 for API, allowing /auth/login for web UI login page)
 ingress:
   enabled: false
   className: ""
@@ -490,16 +502,31 @@ ingress:
   hosts:
     - host: kurrier.local
       paths:
+        # Supabase API endpoints via Kong - versioned paths to avoid web UI conflicts
+        - path: /rest/v1
+          pathType: Prefix
+          service: kong
+        - path: /auth/v1
+          pathType: Prefix
+          service: kong
+        - path: /storage/v1
+          pathType: Prefix
+          service: kong
+        - path: /realtime/v1
+          pathType: Prefix
+          service: kong
+        # Kurrier Web - main UI (catch-all, must be last)
         - path: /
           pathType: Prefix
           service: web
-        - path: /api
-          pathType: Prefix
-          service: kong
-        - path: /studio
-          pathType: Prefix
-          service: studio
   tls: []
+  # -- Separate ingress for Supabase Studio (optional, uses different hostname)
+  studio:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: kurrier-studio.local
+    tls: []
 
 # -- Gateway API configuration (HTTPRoute)
 gateway:

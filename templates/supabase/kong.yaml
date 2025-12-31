@@ -134,4 +134,16 @@ spec:
       name: https
   selector:
     {{- include "kurrier.kong.selectorLabels" . | nindent 4 }}
+---
+# Alias service for 'kong' - the Kurrier app expects to reach Kong at http://kong:8000
+# This ExternalName service redirects to the actual kurrier-kong service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong
+  labels:
+    {{- include "kurrier.kong.labels" . | nindent 4 }}
+spec:
+  type: ExternalName
+  externalName: {{ include "kurrier.kong.serviceName" . }}.{{ .Release.Namespace }}.svc.cluster.local
 {{- end }}

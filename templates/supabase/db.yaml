@@ -253,6 +253,465 @@ data:
     EOSQL
 
     echo "Supabase initialization complete."
+
+    # Now create the Kurrier application schema
+    echo "Setting up Kurrier application schema..."
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-'EOSQL'
+      -- Enable Supabase Vault for secure secret storage
+      CREATE EXTENSION IF NOT EXISTS pgsodium;
+      CREATE EXTENSION IF NOT EXISTS supabase_vault;
+
+      -- Grant vault usage to authenticated role
+      GRANT USAGE ON SCHEMA vault TO authenticated;
+      GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA vault TO authenticated;
+
+      -- Kurrier enum types
+      DO $$ BEGIN
+        CREATE TYPE "public"."identity_kind" AS ENUM('domain', 'email');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE "public"."identity_status" AS ENUM('unverified', 'pending', 'verified', 'failed');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE "public"."mailbox_kind" AS ENUM('inbox', 'sent', 'drafts', 'archive', 'spam', 'trash', 'outbox', 'custom');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE "public"."message_priority" AS ENUM('low', 'medium', 'high');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE "public"."message_state" AS ENUM('normal', 'bounced', 'queued', 'failed');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE "public"."provider_kind" AS ENUM('smtp', 'ses', 'mailgun', 'postmark', 'sendgrid', 's3');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE "public"."mailbox_sync_phase" AS ENUM('BOOTSTRAP', 'BACKFILL', 'IDLE');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      -- Kurrier tables
+      CREATE TABLE IF NOT EXISTS "identities" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "kind" "identity_kind" NOT NULL,
+        "public_id" text NOT NULL,
+        "value" text NOT NULL,
+        "display_name" text,
+        "incoming_domain" boolean DEFAULT false,
+        "domain_identity_id" uuid DEFAULT null,
+        "dns_records" jsonb DEFAULT 'null'::jsonb,
+        "meta" jsonb DEFAULT 'null'::jsonb,
+        "provider_id" uuid,
+        "smtp_account_id" uuid,
+        "status" "identity_status" DEFAULT 'unverified' NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "identities" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "providers" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "type" "provider_kind" NOT NULL,
+        "meta" jsonb DEFAULT 'null'::jsonb,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "providers" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "smtp_accounts" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "smtp_accounts" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "threads" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "last_message_date" timestamp with time zone,
+        "last_message_id" uuid DEFAULT null,
+        "message_count" integer DEFAULT 0 NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "threads" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "mailboxes" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "identity_id" uuid NOT NULL,
+        "parent_id" uuid,
+        "public_id" text NOT NULL,
+        "kind" "mailbox_kind" DEFAULT 'inbox' NOT NULL,
+        "name" text,
+        "slug" text,
+        "is_default" boolean DEFAULT false NOT NULL,
+        "meta" jsonb DEFAULT 'null'::jsonb,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "mailboxes" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "mailbox_sync" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "identity_id" uuid NOT NULL,
+        "mailbox_id" uuid NOT NULL,
+        "uid_validity" bigint NOT NULL,
+        "last_seen_uid" bigint DEFAULT 0 NOT NULL,
+        "backfill_cursor_uid" bigint DEFAULT 0 NOT NULL,
+        "highest_modseq" numeric(20, 0),
+        "phase" "mailbox_sync_phase" DEFAULT 'BOOTSTRAP' NOT NULL,
+        "synced_at" timestamp with time zone,
+        "error" text,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS "mailbox_threads" (
+        "thread_id" uuid NOT NULL,
+        "mailbox_id" uuid NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "identity_id" uuid NOT NULL,
+        "identity_public_id" text NOT NULL,
+        "mailbox_slug" text,
+        "subject" text,
+        "preview_text" text,
+        "last_activity_at" timestamp with time zone NOT NULL,
+        "first_message_at" timestamp with time zone,
+        "message_count" integer DEFAULT 0 NOT NULL,
+        "unread_count" integer DEFAULT 0 NOT NULL,
+        "has_attachments" boolean DEFAULT false NOT NULL,
+        "starred" boolean DEFAULT false NOT NULL,
+        "snoozed_until" timestamp with time zone,
+        "unsnoozed_at" timestamp with time zone,
+        "participants" jsonb,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+        CONSTRAINT "pk_mailbox_threads" PRIMARY KEY("thread_id","mailbox_id")
+      );
+      ALTER TABLE "mailbox_threads" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "messages" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "mailbox_id" uuid NOT NULL,
+        "public_id" text NOT NULL,
+        "message_id" text NOT NULL,
+        "in_reply_to" text,
+        "references" text[],
+        "thread_id" uuid NOT NULL,
+        "reply_to" jsonb DEFAULT '[]'::jsonb,
+        "delivered_to" text,
+        "priority" "message_priority" DEFAULT null,
+        "html" text,
+        "subject" text,
+        "snippet" text,
+        "text" text,
+        "text_as_html" text,
+        "from" jsonb DEFAULT null,
+        "to" jsonb DEFAULT null,
+        "cc" jsonb DEFAULT null,
+        "bcc" jsonb DEFAULT null,
+        "date" timestamp with time zone,
+        "size_bytes" integer,
+        "seen" boolean DEFAULT false NOT NULL,
+        "answered" boolean DEFAULT false NOT NULL,
+        "flagged" boolean DEFAULT false NOT NULL,
+        "draft" boolean DEFAULT false NOT NULL,
+        "has_attachments" boolean DEFAULT false NOT NULL,
+        "state" "message_state" DEFAULT 'normal' NOT NULL,
+        "headers_json" jsonb DEFAULT 'null'::jsonb,
+        "raw_storage_key" text,
+        "meta" jsonb DEFAULT 'null'::jsonb,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "messages" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "message_attachments" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "message_id" uuid NOT NULL,
+        "bucket_id" text DEFAULT 'attachments' NOT NULL,
+        "path" text NOT NULL,
+        "filename_original" text,
+        "content_type" text,
+        "size_bytes" integer,
+        "cid" text,
+        "is_inline" boolean DEFAULT false NOT NULL,
+        "checksum" text,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "message_attachments" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "secrets_meta" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "name" text NOT NULL,
+        "description" text,
+        "vault_secret" uuid NOT NULL
+      );
+      ALTER TABLE "secrets_meta" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "provider_secrets" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "provider_id" uuid NOT NULL,
+        "secret_id" uuid NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "provider_secrets" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "smtp_account_secrets" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "account_id" uuid NOT NULL,
+        "secret_id" uuid NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "smtp_account_secrets" ENABLE ROW LEVEL SECURITY;
+
+      -- Label scope enum
+      DO $$ BEGIN
+        CREATE TYPE "public"."label_scope" AS ENUM('thread', 'message', 'contact');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      CREATE TABLE IF NOT EXISTS "labels" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "public_id" text NOT NULL,
+        "name" text NOT NULL,
+        "slug" text,
+        "parent_id" uuid,
+        "color_bg" text,
+        "color_text" text,
+        "is_system" boolean DEFAULT false NOT NULL,
+        "meta" jsonb DEFAULT 'null'::jsonb,
+        "scope" "label_scope" NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "labels" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "thread_labels" (
+        "thread_id" uuid NOT NULL,
+        "label_id" uuid NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        CONSTRAINT "pk_thread_labels" PRIMARY KEY ("thread_id", "label_id")
+      );
+      ALTER TABLE "thread_labels" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "message_labels" (
+        "message_id" uuid NOT NULL,
+        "label_id" uuid NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        CONSTRAINT "pk_message_labels" PRIMARY KEY ("message_id", "label_id")
+      );
+      ALTER TABLE "message_labels" ENABLE ROW LEVEL SECURITY;
+
+      -- Grant permissions to authenticated and anon roles
+      GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+      GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+
+      -- Create indexes (skip if they exist)
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_identity_per_user" ON "identities" USING btree ("owner_id","kind","value");
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_identity_public_id" ON "identities" USING btree ("public_id");
+      CREATE UNIQUE INDEX IF NOT EXISTS "ux_mailbox_sync_mailbox" ON "mailbox_sync" USING btree ("mailbox_id");
+      CREATE INDEX IF NOT EXISTS "ix_mailbox_sync_identity" ON "mailbox_sync" USING btree ("identity_id");
+      CREATE INDEX IF NOT EXISTS "ix_mailbox_sync_phase" ON "mailbox_sync" USING btree ("phase");
+      CREATE INDEX IF NOT EXISTS "ix_mbth_mailbox_activity" ON "mailbox_threads" USING btree ("mailbox_id","last_activity_at","thread_id");
+      CREATE INDEX IF NOT EXISTS "ix_mbth_identity_slug" ON "mailbox_threads" USING btree ("identity_id","mailbox_slug");
+      CREATE INDEX IF NOT EXISTS "ix_mbth_identity_public_id" ON "mailbox_threads" USING btree ("identity_public_id");
+      CREATE INDEX IF NOT EXISTS "ix_mbth_mailbox_unread" ON "mailbox_threads" USING btree ("mailbox_id","unread_count");
+      CREATE INDEX IF NOT EXISTS "ix_mbth_mailbox_starred" ON "mailbox_threads" USING btree ("mailbox_id","starred");
+      CREATE UNIQUE INDEX IF NOT EXISTS "ux_mbth_thread_mailbox" ON "mailbox_threads" USING btree ("thread_id","mailbox_id");
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_mailbox_public_id" ON "mailboxes" USING btree ("public_id");
+      CREATE INDEX IF NOT EXISTS "idx_msg_attachments_message" ON "message_attachments" USING btree ("message_id");
+      CREATE INDEX IF NOT EXISTS "idx_msg_attachments_cid" ON "message_attachments" USING btree ("cid");
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_message_public_id" ON "messages" USING btree ("public_id");
+      CREATE INDEX IF NOT EXISTS "idx_messages_priority" ON "messages" USING btree ("priority");
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_mailbox_message_id" ON "messages" USING btree ("mailbox_id","message_id");
+      CREATE INDEX IF NOT EXISTS "idx_messages_in_reply_to" ON "messages" USING btree ("in_reply_to");
+      CREATE INDEX IF NOT EXISTS "ix_messages_thread_flagged" ON "messages" USING btree ("thread_id","flagged");
+      CREATE INDEX IF NOT EXISTS "idx_messages_mailbox_date" ON "messages" USING btree ("mailbox_id","date");
+      CREATE INDEX IF NOT EXISTS "idx_messages_mailbox_seen_date" ON "messages" USING btree ("mailbox_id","seen","date");
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_provider_per_user" ON "providers" USING btree ("owner_id","type");
+      CREATE INDEX IF NOT EXISTS "idx_threads_owner_lastdate" ON "threads" USING btree ("owner_id","last_message_date","id");
+      CREATE INDEX IF NOT EXISTS "idx_threads_owner_id" ON "threads" USING btree ("owner_id","id");
+
+      -- Create RLS policies (idempotent using DO blocks)
+      DO $$ BEGIN
+        CREATE POLICY "identities_select_own" ON "identities" FOR SELECT TO "authenticated" USING ("identities"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "identities_insert_own" ON "identities" FOR INSERT TO "authenticated" WITH CHECK ("identities"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "identities_update_own" ON "identities" FOR UPDATE TO "authenticated" USING ("identities"."owner_id" = auth.uid()) WITH CHECK ("identities"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "identities_delete_own" ON "identities" FOR DELETE TO "authenticated" USING ("identities"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "mbth_select_own" ON "mailbox_threads" FOR SELECT TO "authenticated" USING ("mailbox_threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "mbth_insert_own" ON "mailbox_threads" FOR INSERT TO "authenticated" WITH CHECK ("mailbox_threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "mbth_update_own" ON "mailbox_threads" FOR UPDATE TO "authenticated" USING ("mailbox_threads"."owner_id" = auth.uid()) WITH CHECK ("mailbox_threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "mbth_delete_own" ON "mailbox_threads" FOR DELETE TO "authenticated" USING ("mailbox_threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "mailboxes_select_own" ON "mailboxes" FOR SELECT TO "authenticated" USING ("mailboxes"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "mailboxes_insert_own" ON "mailboxes" FOR INSERT TO "authenticated" WITH CHECK ("mailboxes"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "mailboxes_update_own" ON "mailboxes" FOR UPDATE TO "authenticated" USING ("mailboxes"."owner_id" = auth.uid()) WITH CHECK ("mailboxes"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "mailboxes_delete_own" ON "mailboxes" FOR DELETE TO "authenticated" USING ("mailboxes"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "messages_select_own" ON "messages" FOR SELECT TO "authenticated" USING ("messages"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "messages_insert_own" ON "messages" FOR INSERT TO "authenticated" WITH CHECK ("messages"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "messages_update_own" ON "messages" FOR UPDATE TO "authenticated" USING ("messages"."owner_id" = auth.uid()) WITH CHECK ("messages"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "messages_delete_own" ON "messages" FOR DELETE TO "authenticated" USING ("messages"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "message_attachments_select_own" ON "message_attachments" FOR SELECT TO "authenticated" USING ("message_attachments"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "message_attachments_insert_own" ON "message_attachments" FOR INSERT TO "authenticated" WITH CHECK ("message_attachments"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "message_attachments_update_own" ON "message_attachments" FOR UPDATE TO "authenticated" USING ("message_attachments"."owner_id" = auth.uid()) WITH CHECK ("message_attachments"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "message_attachments_delete_own" ON "message_attachments" FOR DELETE TO "authenticated" USING ("message_attachments"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "providers_select_own" ON "providers" FOR SELECT TO "authenticated" USING ("providers"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "providers_insert_own" ON "providers" FOR INSERT TO "authenticated" WITH CHECK ("providers"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "providers_update_own" ON "providers" FOR UPDATE TO "authenticated" USING ("providers"."owner_id" = auth.uid()) WITH CHECK ("providers"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "providers_delete_own" ON "providers" FOR DELETE TO "authenticated" USING ("providers"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "smtp_select_own" ON "smtp_accounts" FOR SELECT TO "authenticated" USING ("smtp_accounts"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "smtp_insert_own" ON "smtp_accounts" FOR INSERT TO "authenticated" WITH CHECK ("smtp_accounts"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "smtp_update_own" ON "smtp_accounts" FOR UPDATE TO "authenticated" USING ("smtp_accounts"."owner_id" = auth.uid()) WITH CHECK ("smtp_accounts"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "smtp_delete_own" ON "smtp_accounts" FOR DELETE TO "authenticated" USING ("smtp_accounts"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "threads_select_own" ON "threads" FOR SELECT TO "authenticated" USING ("threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "threads_insert_own" ON "threads" FOR INSERT TO "authenticated" WITH CHECK ("threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "threads_update_own" ON "threads" FOR UPDATE TO "authenticated" USING ("threads"."owner_id" = auth.uid()) WITH CHECK ("threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "threads_delete_own" ON "threads" FOR DELETE TO "authenticated" USING ("threads"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "select_own" ON "secrets_meta" FOR SELECT TO "authenticated" USING ("secrets_meta"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "insert_own" ON "secrets_meta" FOR INSERT TO "authenticated" WITH CHECK ("secrets_meta"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "update_own" ON "secrets_meta" FOR UPDATE TO "authenticated" USING ("secrets_meta"."owner_id" = auth.uid()) WITH CHECK ("secrets_meta"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "delete_own" ON "secrets_meta" FOR DELETE TO "authenticated" USING ("secrets_meta"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      -- Labels policies
+      DO $$ BEGIN
+        CREATE POLICY "labels_select_own" ON "labels" FOR SELECT TO "authenticated" USING ("labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "labels_insert_own" ON "labels" FOR INSERT TO "authenticated" WITH CHECK ("labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "labels_update_own" ON "labels" FOR UPDATE TO "authenticated" USING ("labels"."owner_id" = auth.uid()) WITH CHECK ("labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "labels_delete_own" ON "labels" FOR DELETE TO "authenticated" USING ("labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      -- Thread labels policies
+      DO $$ BEGIN
+        CREATE POLICY "thread_labels_select_own" ON "thread_labels" FOR SELECT TO "authenticated" USING ("thread_labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "thread_labels_insert_own" ON "thread_labels" FOR INSERT TO "authenticated" WITH CHECK ("thread_labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "thread_labels_delete_own" ON "thread_labels" FOR DELETE TO "authenticated" USING ("thread_labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      -- Message labels policies
+      DO $$ BEGIN
+        CREATE POLICY "message_labels_select_own" ON "message_labels" FOR SELECT TO "authenticated" USING ("message_labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "message_labels_insert_own" ON "message_labels" FOR INSERT TO "authenticated" WITH CHECK ("message_labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "message_labels_delete_own" ON "message_labels" FOR DELETE TO "authenticated" USING ("message_labels"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      -- Labels indexes
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_label_public_id" ON "labels" USING btree ("public_id");
+      CREATE INDEX IF NOT EXISTS "idx_labels_scope" ON "labels" USING btree ("scope");
+      CREATE INDEX IF NOT EXISTS "idx_labels_owner" ON "labels" USING btree ("owner_id");
+    EOSQL
+
+    echo "Kurrier application schema setup complete."
 ---
 {{- if and (not .Values.supabase.db.existingSecret) }}
 apiVersion: v1

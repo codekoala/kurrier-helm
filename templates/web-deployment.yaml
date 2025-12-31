@@ -91,6 +91,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "kurrier.rls.secretName" . }}
                   key: {{ .Values.kurrier.rls.secretKey }}
+            # TLS verification
+            {{- if .Values.kurrier.skipTlsVerify }}
+            - name: NODE_TLS_REJECT_UNAUTHORIZED
+              value: "0"
+            {{- end }}
             {{- with .Values.web.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

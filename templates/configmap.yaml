@@ -24,6 +24,9 @@ data:
   # Kurrier configuration
   WEB_URL: {{ .Values.kurrier.webUrl | quote }}
   API_URL: {{ .Values.kurrier.apiUrl | quote }}
+  # API_PUBLIC_URL is used by the browser to reach Supabase API endpoints
+  # Must be a publicly accessible URL (not internal service URL)
+  API_PUBLIC_URL: {{ .Values.kurrier.apiPublicUrl | quote }}
   {{- if .Values.kurrier.localTunnelUrl }}
   LOCAL_TUNNEL_URL: {{ .Values.kurrier.localTunnelUrl | quote }}
   {{- end }}

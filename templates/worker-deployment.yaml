@@ -96,6 +96,11 @@ spec:
             # Search
             - name: SEARCH_REBUILD_ON_BOOT
               value: "false"
+            # TLS verification
+            {{- if .Values.kurrier.skipTlsVerify }}
+            - name: NODE_TLS_REJECT_UNAUTHORIZED
+              value: "0"
+            {{- end }}
             {{- with .Values.worker.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
