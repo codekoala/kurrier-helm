@@ -64,7 +64,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kurrier.vault.secretName" . }}
-                  key: {{ .Values.kurrier.vault.secretKey }}
+                  key: {{ .Values.kurrier.vault.secretKeyBaseKey }}
             - name: ERL_AFLAGS
               value: "-proto_dist inet_tcp"
             - name: ENABLE_TAILSCALE

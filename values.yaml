@@ -492,8 +492,11 @@ kurrier:
 
   vault:
     encryptionKey: "your-encryption-key-32-chars-min"
+    # -- Secret key base for realtime service (must be at least 64 bytes)
+    secretKeyBase: "your-secret-key-base-64-chars-minimum-for-realtime-service-sessions"
     existingSecret: ""
     secretKey: "vault-encryption-key"
+    secretKeyBaseKey: "secret-key-base"
 
   rls:
     clientPassword: "replace_with_your_rls_client_password"
