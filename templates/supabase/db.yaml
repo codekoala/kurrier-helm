@@ -523,6 +523,40 @@ data:
       );
       ALTER TABLE "message_labels" ENABLE ROW LEVEL SECURITY;
 
+      -- DAV tables for CalDAV/CardDAV sync
+      CREATE TABLE IF NOT EXISTS "address_books" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "dav_account_id" uuid,
+        "dav_sync_token" text,
+        "dav_address_book_id" text,
+        "name" text NOT NULL,
+        "slug" text,
+        "remote_path" text,
+        "is_default" boolean DEFAULT false NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "address_books" ENABLE ROW LEVEL SECURITY;
+
+      CREATE TABLE IF NOT EXISTS "calendars" (
+        "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+        "owner_id" uuid DEFAULT auth.uid() NOT NULL,
+        "public_id" text NOT NULL,
+        "dav_account_id" uuid,
+        "dav_sync_token" text,
+        "dav_calendar_id" text,
+        "remote_path" text,
+        "name" text NOT NULL,
+        "slug" text,
+        "color" text,
+        "timezone" text,
+        "is_default" boolean DEFAULT false NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      );
+      ALTER TABLE "calendars" ENABLE ROW LEVEL SECURITY;
+
       -- Grant permissions to authenticated and anon roles
       GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
       GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
@@ -712,6 +746,38 @@ data:
       CREATE UNIQUE INDEX IF NOT EXISTS "uniq_label_public_id" ON "labels" USING btree ("public_id");
       CREATE INDEX IF NOT EXISTS "idx_labels_scope" ON "labels" USING btree ("scope");
       CREATE INDEX IF NOT EXISTS "idx_labels_owner" ON "labels" USING btree ("owner_id");
+
+      -- DAV tables policies
+      DO $$ BEGIN
+        CREATE POLICY "address_books_select_own" ON "address_books" FOR SELECT TO "authenticated" USING ("address_books"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "address_books_insert_own" ON "address_books" FOR INSERT TO "authenticated" WITH CHECK ("address_books"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "address_books_update_own" ON "address_books" FOR UPDATE TO "authenticated" USING ("address_books"."owner_id" = auth.uid()) WITH CHECK ("address_books"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "address_books_delete_own" ON "address_books" FOR DELETE TO "authenticated" USING ("address_books"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE POLICY "calendars_select_own" ON "calendars" FOR SELECT TO "authenticated" USING ("calendars"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "calendars_insert_own" ON "calendars" FOR INSERT TO "authenticated" WITH CHECK ("calendars"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "calendars_update_own" ON "calendars" FOR UPDATE TO "authenticated" USING ("calendars"."owner_id" = auth.uid()) WITH CHECK ("calendars"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+      DO $$ BEGIN
+        CREATE POLICY "calendars_delete_own" ON "calendars" FOR DELETE TO "authenticated" USING ("calendars"."owner_id" = auth.uid());
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      -- DAV indexes
+      CREATE INDEX IF NOT EXISTS "idx_address_books_owner" ON "address_books" USING btree ("owner_id");
+      CREATE INDEX IF NOT EXISTS "idx_calendars_owner" ON "calendars" USING btree ("owner_id");
+      CREATE UNIQUE INDEX IF NOT EXISTS "uniq_calendar_public_id" ON "calendars" USING btree ("public_id");
     EOSQL
 
     echo "Kurrier application schema setup complete."
