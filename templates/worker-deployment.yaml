@@ -96,10 +96,15 @@ spec:
             # Search
             - name: SEARCH_REBUILD_ON_BOOT
               value: "false"
-            # DAV URL (Baikal)
+            # DAV URL (Baikal for CardDAV/CalDAV)
             {{- if and .Values.dav.enabled .Values.dav.baikal.enabled }}
             - name: DAV_URL
               value: "http://{{ include "kurrier.baikal.serviceName" . }}:{{ .Values.dav.baikal.service.port }}"
+            {{- end }}
+            # WebDAV URL (for file storage)
+            {{- if .Values.webdav.enabled }}
+            - name: WEB_DAV_URL
+              value: "http://{{ include "kurrier.webdav.serviceName" . }}:{{ .Values.webdav.service.port }}"
             {{- end }}
             # TLS verification
             {{- if .Values.kurrier.skipTlsVerify }}

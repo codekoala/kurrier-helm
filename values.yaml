@@ -419,6 +419,35 @@ dav:
       accessModes:
         - ReadWriteOnce
 
+# -- WebDAV server for file storage (Drive feature)
+webdav:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/hacdias/webdav
+    tag: "v5.10.1"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 6065
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # -- Valkey (Redis-compatible) cache
 valkey:
   enabled: true

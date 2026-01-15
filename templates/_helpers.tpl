@@ -254,6 +254,13 @@ app.kubernetes.io/component: webdav
 {{- end }}
 
 {{/*
+WebDAV service name
+*/}}
+{{- define "kurrier.webdav.serviceName" -}}
+{{- printf "%s-webdav" (include "kurrier.fullname" .) }}
+{{- end }}
+
+{{/*
 PostgreSQL host
 */}}
 {{- define "kurrier.postgresql.host" -}}

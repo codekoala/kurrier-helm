@@ -2,7 +2,7 @@ apiVersion: v2
 name: kurrier
 description: A Helm chart for deploying Kurrier - a modern, self-hosted webmail that integrates with all major ESPs
 type: application
-version: 0.1.30
+version: 0.1.31
 appVersion: "v1.1.11"
 keywords:
   - email
