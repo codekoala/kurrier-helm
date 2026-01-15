@@ -1,0 +1,353 @@
+{{- if and .Values.supabase.enabled .Values.supabase.db.enabled (not .Values.externalPostgresql.enabled) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kurrier.fullname" . }}-db-migrations
+  labels:
+    {{- include "kurrier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-migrations
+  annotations:
+    # Run after install/upgrade
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "kurrier.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: db-migrations
+    spec:
+      restartPolicy: OnFailure
+      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
+      initContainers:
+        # Wait for database to be ready
+        - name: wait-for-db
+          image: busybox:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for database to be ready..."
+              until nc -z {{ include "kurrier.fullname" . }}-db 5432; do
+                echo "Database not ready, waiting..."
+                sleep 2
+              done
+              echo "Database is ready!"
+      containers:
+        - name: migrations
+          image: "{{ .Values.supabase.db.image.repository }}:{{ .Values.supabase.db.image.tag }}"
+          env:
+            - name: PGHOST
+              value: {{ include "kurrier.fullname" . }}-db
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: {{ .Values.supabase.db.database | quote }}
+            - name: PGUSER
+              value: "postgres"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.postgresql.secretName" . }}
+                  key: {{ include "kurrier.postgresql.secretKey" . }}
+            - name: RLS_CLIENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.rls.secretName" . }}
+                  key: {{ .Values.kurrier.rls.secretKey }}
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              echo "Running Kurrier database migrations..."
+
+              # Wait for storage schema to exist (created by storage service)
+              echo "Waiting for storage.buckets table..."
+              for i in $(seq 1 60); do
+                if psql -c "SELECT 1 FROM storage.buckets LIMIT 1" 2>/dev/null; then
+                  echo "Storage schema ready!"
+                  break
+                fi
+                echo "Waiting for storage schema... ($i/60)"
+                sleep 2
+              done
+
+              # Create migrations tracking table
+              psql -v ON_ERROR_STOP=1 <<-'EOSQL'
+                CREATE TABLE IF NOT EXISTS public.migrations (
+                  version TEXT PRIMARY KEY,
+                  applied_at TIMESTAMPTZ DEFAULT NOW()
+                );
+              EOSQL
+
+              # Migration 001: RLS Client and Storage Bucket
+              if ! psql -tAc "SELECT 1 FROM migrations WHERE version = '001_rls_client'" | grep -q 1; then
+                echo "Applying migration 001_rls_client..."
+                psql -v ON_ERROR_STOP=1 <<-EOSQL
+                  -- Create policy helper function
+                  CREATE OR REPLACE FUNCTION public.__ensure_policy(p_name text, p_rel regclass, p_sql text)
+                  RETURNS void LANGUAGE plpgsql AS \$\$
+                  BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_policy WHERE polname = p_name AND polrelid = p_rel) THEN
+                      EXECUTE p_sql;
+                    END IF;
+                  END\$\$;
+
+                  -- Create RLS client user if not exists
+                  DO \$\$
+                  BEGIN
+                    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'rls_client') THEN
+                      CREATE USER rls_client
+                        WITH LOGIN PASSWORD '${RLS_CLIENT_PASSWORD}'
+                        NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+                      GRANT anon TO rls_client;
+                      GRANT authenticated TO rls_client;
+                    END IF;
+                  END \$\$;
+
+                  -- Create attachments bucket if not exists
+                  INSERT INTO storage.buckets (id, name, public)
+                  VALUES ('attachments', 'attachments', false)
+                  ON CONFLICT (id) DO NOTHING;
+
+                  -- Storage RLS policies
+                  SELECT public.__ensure_policy(
+                    'private-own-crud',
+                    'storage.objects'::regclass,
+                    \$policy\$
+                      CREATE POLICY "private-own-crud" ON storage.objects
+                      FOR ALL TO authenticated
+                      USING (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'private' AND (storage.foldername(name))[2] = auth.uid()::text)
+                      WITH CHECK (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'private' AND (storage.foldername(name))[2] = auth.uid()::text)
+                    \$policy\$
+                  );
+
+                  SELECT public.__ensure_policy(
+                    'eml-own-crud',
+                    'storage.objects'::regclass,
+                    \$policy\$
+                      CREATE POLICY "eml-own-crud" ON storage.objects
+                      FOR ALL TO authenticated
+                      USING (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'eml' AND (storage.foldername(name))[2] = auth.uid()::text)
+                      WITH CHECK (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'eml' AND (storage.foldername(name))[2] = auth.uid()::text)
+                    \$policy\$
+                  );
+
+                  -- Record migration
+                  INSERT INTO migrations (version) VALUES ('001_rls_client');
+              EOSQL
+                echo "Migration 001_rls_client applied."
+              else
+                echo "Migration 001_rls_client already applied, skipping."
+              fi
+
+              # Migration 002: Provider secrets RLS policies
+              if ! psql -tAc "SELECT 1 FROM migrations WHERE version = '002_provider_secrets_rls'" | grep -q 1; then
+                echo "Applying migration 002_provider_secrets_rls..."
+                psql -v ON_ERROR_STOP=1 <<-'EOSQL'
+                  -- provider_secrets RLS policies - join through providers table
+                  DO $$ BEGIN
+                    CREATE POLICY "provider_secrets_select_own" ON "provider_secrets"
+                      FOR SELECT TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM providers WHERE providers.id = provider_secrets.provider_id AND providers.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "provider_secrets_insert_own" ON "provider_secrets"
+                      FOR INSERT TO "authenticated"
+                      WITH CHECK (EXISTS (
+                        SELECT 1 FROM providers WHERE providers.id = provider_secrets.provider_id AND providers.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "provider_secrets_update_own" ON "provider_secrets"
+                      FOR UPDATE TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM providers WHERE providers.id = provider_secrets.provider_id AND providers.owner_id = auth.uid()
+                      ))
+                      WITH CHECK (EXISTS (
+                        SELECT 1 FROM providers WHERE providers.id = provider_secrets.provider_id AND providers.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "provider_secrets_delete_own" ON "provider_secrets"
+                      FOR DELETE TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM providers WHERE providers.id = provider_secrets.provider_id AND providers.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  -- smtp_account_secrets RLS policies - join through smtp_accounts table
+                  DO $$ BEGIN
+                    CREATE POLICY "smtp_account_secrets_select_own" ON "smtp_account_secrets"
+                      FOR SELECT TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM smtp_accounts WHERE smtp_accounts.id = smtp_account_secrets.account_id AND smtp_accounts.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "smtp_account_secrets_insert_own" ON "smtp_account_secrets"
+                      FOR INSERT TO "authenticated"
+                      WITH CHECK (EXISTS (
+                        SELECT 1 FROM smtp_accounts WHERE smtp_accounts.id = smtp_account_secrets.account_id AND smtp_accounts.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "smtp_account_secrets_update_own" ON "smtp_account_secrets"
+                      FOR UPDATE TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM smtp_accounts WHERE smtp_accounts.id = smtp_account_secrets.account_id AND smtp_accounts.owner_id = auth.uid()
+                      ))
+                      WITH CHECK (EXISTS (
+                        SELECT 1 FROM smtp_accounts WHERE smtp_accounts.id = smtp_account_secrets.account_id AND smtp_accounts.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "smtp_account_secrets_delete_own" ON "smtp_account_secrets"
+                      FOR DELETE TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM smtp_accounts WHERE smtp_accounts.id = smtp_account_secrets.account_id AND smtp_accounts.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  -- Record migration
+                  INSERT INTO migrations (version) VALUES ('002_provider_secrets_rls');
+              EOSQL
+                echo "Migration 002_provider_secrets_rls applied."
+              else
+                echo "Migration 002_provider_secrets_rls already applied, skipping."
+              fi
+
+              # Migration 003: Mail rules tables (from upstream 017_migration.sql)
+              if ! psql -tAc "SELECT 1 FROM migrations WHERE version = '003_mail_rules'" | grep -q 1; then
+                echo "Applying migration 003_mail_rules..."
+                psql -v ON_ERROR_STOP=1 <<-'EOSQL'
+                  -- Mail rule action type enum
+                  DO $$ BEGIN
+                    CREATE TYPE "public"."mail_rule_action_type" AS ENUM(
+                      'mark_read', 'flag', 'add_label', 'remove_label',
+                      'move_to_mailbox', 'forward_to', 'delete', 'archive'
+                    );
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  -- Mail rules table
+                  CREATE TABLE IF NOT EXISTS "mail_rules" (
+                    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+                    "owner_id" uuid DEFAULT auth.uid() NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+                    "identity_id" uuid NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+                    "name" text NOT NULL,
+                    "enabled" boolean DEFAULT true NOT NULL,
+                    "match_conditions" jsonb NOT NULL DEFAULT '[]'::jsonb,
+                    "match_mode" text DEFAULT 'all' NOT NULL,
+                    "priority" integer DEFAULT 0 NOT NULL,
+                    "stop_processing" boolean DEFAULT false NOT NULL,
+                    "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+                    "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+                  );
+                  ALTER TABLE "mail_rules" ENABLE ROW LEVEL SECURITY;
+
+                  -- Mail rule actions table
+                  CREATE TABLE IF NOT EXISTS "mail_rule_actions" (
+                    "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+                    "rule_id" uuid NOT NULL REFERENCES mail_rules(id) ON DELETE CASCADE,
+                    "action_type" "mail_rule_action_type" NOT NULL,
+                    "action_params" jsonb DEFAULT '{}'::jsonb,
+                    "order" integer DEFAULT 0 NOT NULL,
+                    "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+                    "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+                  );
+                  ALTER TABLE "mail_rule_actions" ENABLE ROW LEVEL SECURITY;
+
+                  -- Mail rules RLS policies
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rules_select_own" ON "mail_rules"
+                      FOR SELECT TO "authenticated"
+                      USING ("mail_rules"."owner_id" = auth.uid());
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rules_insert_own" ON "mail_rules"
+                      FOR INSERT TO "authenticated"
+                      WITH CHECK ("mail_rules"."owner_id" = auth.uid());
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rules_update_own" ON "mail_rules"
+                      FOR UPDATE TO "authenticated"
+                      USING ("mail_rules"."owner_id" = auth.uid())
+                      WITH CHECK ("mail_rules"."owner_id" = auth.uid());
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rules_delete_own" ON "mail_rules"
+                      FOR DELETE TO "authenticated"
+                      USING ("mail_rules"."owner_id" = auth.uid());
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  -- Mail rule actions RLS policies (via join to mail_rules)
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rule_actions_select_own" ON "mail_rule_actions"
+                      FOR SELECT TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM mail_rules WHERE mail_rules.id = mail_rule_actions.rule_id AND mail_rules.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rule_actions_insert_own" ON "mail_rule_actions"
+                      FOR INSERT TO "authenticated"
+                      WITH CHECK (EXISTS (
+                        SELECT 1 FROM mail_rules WHERE mail_rules.id = mail_rule_actions.rule_id AND mail_rules.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rule_actions_update_own" ON "mail_rule_actions"
+                      FOR UPDATE TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM mail_rules WHERE mail_rules.id = mail_rule_actions.rule_id AND mail_rules.owner_id = auth.uid()
+                      ))
+                      WITH CHECK (EXISTS (
+                        SELECT 1 FROM mail_rules WHERE mail_rules.id = mail_rule_actions.rule_id AND mail_rules.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  DO $$ BEGIN
+                    CREATE POLICY "mail_rule_actions_delete_own" ON "mail_rule_actions"
+                      FOR DELETE TO "authenticated"
+                      USING (EXISTS (
+                        SELECT 1 FROM mail_rules WHERE mail_rules.id = mail_rule_actions.rule_id AND mail_rules.owner_id = auth.uid()
+                      ));
+                  EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+                  -- Indexes
+                  CREATE INDEX IF NOT EXISTS "idx_mail_rules_owner" ON "mail_rules" USING btree ("owner_id");
+                  CREATE INDEX IF NOT EXISTS "idx_mail_rules_identity" ON "mail_rules" USING btree ("identity_id");
+                  CREATE INDEX IF NOT EXISTS "idx_mail_rules_enabled_priority" ON "mail_rules" USING btree ("enabled", "priority");
+                  CREATE INDEX IF NOT EXISTS "idx_mail_rule_actions_rule" ON "mail_rule_actions" USING btree ("rule_id", "order");
+
+                  -- Grant permissions
+                  GRANT ALL ON mail_rules TO authenticated;
+                  GRANT ALL ON mail_rule_actions TO authenticated;
+
+                  -- Record migration
+                  INSERT INTO migrations (version) VALUES ('003_mail_rules');
+              EOSQL
+                echo "Migration 003_mail_rules applied."
+              else
+                echo "Migration 003_mail_rules already applied, skipping."
+              fi
+
+              echo "All migrations complete!"
+{{- end }}
