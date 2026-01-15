@@ -89,6 +89,9 @@ spec:
             {{- end }}
             - name: GOTRUE_RATE_LIMIT_EMAIL_SENT
               value: "100"
+            # Allow auth from Kong proxy and external host
+            - name: GOTRUE_EXTERNAL_HOSTS
+              value: {{ printf "%s,kong" (include "kurrier.kongExternalHost" .) | quote }}
           livenessProbe:
             httpGet:
               path: /health

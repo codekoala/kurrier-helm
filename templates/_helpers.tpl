@@ -222,19 +222,19 @@ app.kubernetes.io/component: typesense
 {{- end }}
 
 {{/*
-Radicale component labels
+Baikal component labels
 */}}
-{{- define "kurrier.radicale.labels" -}}
+{{- define "kurrier.baikal.labels" -}}
 {{ include "kurrier.labels" . }}
-app.kubernetes.io/component: radicale
+app.kubernetes.io/component: baikal
 {{- end }}
 
 {{/*
-Radicale component selector labels
+Baikal component selector labels
 */}}
-{{- define "kurrier.radicale.selectorLabels" -}}
+{{- define "kurrier.baikal.selectorLabels" -}}
 {{ include "kurrier.selectorLabels" . }}
-app.kubernetes.io/component: radicale
+app.kubernetes.io/component: baikal
 {{- end }}
 
 {{/*
@@ -505,10 +505,25 @@ Worker service name
 {{- end }}
 
 {{/*
-Radicale service name
+Baikal service name
 */}}
-{{- define "kurrier.radicale.serviceName" -}}
-{{- printf "%s-radicale" (include "kurrier.fullname" .) }}
+{{- define "kurrier.baikal.serviceName" -}}
+{{- printf "%s-baikal" (include "kurrier.fullname" .) }}
+{{- end }}
+
+{{/*
+Kong external host - extracts hostname from webUrl or first ingress host
+*/}}
+{{- define "kurrier.kongExternalHost" -}}
+{{- if .Values.ingress.enabled }}
+  {{- if .Values.ingress.hosts }}
+    {{- (index .Values.ingress.hosts 0).host }}
+  {{- else }}
+    {{- .Values.kurrier.webUrl | trimPrefix "https://" | trimPrefix "http://" | regexFind "^[^:/]+" }}
+  {{- end }}
+{{- else }}
+  {{- .Values.kurrier.webUrl | trimPrefix "https://" | trimPrefix "http://" | regexFind "^[^:/]+" }}
+{{- end }}
 {{- end }}
 
 {{/*

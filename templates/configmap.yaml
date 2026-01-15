@@ -52,9 +52,9 @@ data:
   {{- end }}
   {{- end }}
   
-  # DAV configuration
-  {{- if and .Values.dav.enabled .Values.dav.radicale.enabled }}
-  RADICALE_URL: {{ printf "http://%s:%d" (include "kurrier.radicale.serviceName" .) (.Values.dav.radicale.service.port | int) | quote }}
+  # DAV configuration (Baikal)
+  {{- if and .Values.dav.enabled .Values.dav.baikal.enabled }}
+  BAIKAL_URL: {{ printf "http://%s:%d" (include "kurrier.baikal.serviceName" .) (.Values.dav.baikal.service.port | int) | quote }}
   {{- end }}
 ---
 {{- if and .Values.supabase.enabled .Values.supabase.kong.enabled }}

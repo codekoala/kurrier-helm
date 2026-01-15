@@ -96,6 +96,11 @@ spec:
             # Search
             - name: SEARCH_REBUILD_ON_BOOT
               value: "false"
+            # DAV URL (Baikal)
+            {{- if and .Values.dav.enabled .Values.dav.baikal.enabled }}
+            - name: DAV_URL
+              value: "http://{{ include "kurrier.baikal.serviceName" . }}:{{ .Values.dav.baikal.service.port }}"
+            {{- end }}
             # TLS verification
             {{- if .Values.kurrier.skipTlsVerify }}
             - name: NODE_TLS_REJECT_UNAUTHORIZED

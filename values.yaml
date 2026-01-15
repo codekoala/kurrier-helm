@@ -383,16 +383,16 @@ typesense:
 # -- DAV services (CardDAV/CalDAV)
 dav:
   enabled: true
-  radicale:
+  baikal:
     enabled: true
     replicaCount: 1
     image:
-      repository: tomsquest/docker-radicale
-      tag: "3.5.4.0"
+      repository: ckulka/baikal
+      tag: "nginx"
       pullPolicy: IfNotPresent
     service:
       type: ClusterIP
-      port: 5232
+      port: 80
     persistence:
       enabled: true
       size: 5Gi
