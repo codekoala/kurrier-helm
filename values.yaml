@@ -390,6 +390,19 @@ dav:
       repository: ckulka/baikal
       tag: "nginx"
       pullPolicy: IfNotPresent
+    # -- Baikal configuration (REQUIRED)
+    config:
+      # -- Admin password hash (REQUIRED)
+      # Generate with: php -r "echo password_hash('yourpassword', PASSWORD_DEFAULT);"
+      # Or use: htpasswd -bnBC 10 "" yourpassword | tr -d ':\n'
+      adminPasswordHash: ""
+      # -- Timezone for Baikal (default: UTC)
+      # See: https://www.php.net/manual/en/timezones.php
+      timezone: "UTC"
+      # -- Auth realm for HTTP Basic authentication
+      authRealm: "BaikalDAV"
+      # -- From email address for calendar invitations
+      inviteFrom: "noreply@example.com"
     service:
       type: ClusterIP
       port: 80
