@@ -221,6 +221,22 @@ data:
       GRANT supabase_storage_admin TO postgres;
       GRANT supabase_functions_admin TO postgres;
 
+      -- Grant schema permissions for Kurrier app tables (created by worker migrations)
+      GRANT USAGE ON SCHEMA public TO authenticated, anon, service_role;
+
+      -- Grant table permissions (for existing tables)
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+      GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, anon, service_role;
+
+      -- Set default privileges for future tables created by postgres user
+      ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated, service_role;
+      ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+        GRANT SELECT ON TABLES TO anon;
+      ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+        GRANT USAGE, SELECT ON SEQUENCES TO authenticated, anon, service_role;
+
       -- Drop and recreate auth/storage schemas to allow GoTrue and Storage to
       -- run their own migrations. The supabase/postgres image creates incompatible
       -- schema objects that break GoTrue's migration assumptions.
