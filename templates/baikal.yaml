@@ -1,12 +1,14 @@
 {{- if and .Values.dav.enabled .Values.dav.baikal.enabled }}
+# NOTE: Using Deployment instead of StatefulSet because Baikal shares the
+# kurrier-dav-data PVC with the worker. The worker creates DAV users/principals
+# in the shared SQLite database at /dav-data/db/db.sqlite.
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: {{ include "kurrier.fullname" . }}-baikal
   labels:
     {{- include "kurrier.baikal.labels" . | nindent 4 }}
 spec:
-  serviceName: {{ include "kurrier.baikal.serviceName" . }}
   replicas: {{ .Values.dav.baikal.replicaCount }}
   selector:
     matchLabels:
@@ -36,11 +38,14 @@ spec:
 
               # Create directory structure
               mkdir -p /var/www/baikal/config
-              mkdir -p /var/www/baikal/Specific/db
+              # Symlink Specific/db to the shared DAV data volume
+              rm -rf /var/www/baikal/Specific/db
+              mkdir -p /var/www/baikal/Specific
+              ln -sf /dav-data/db /var/www/baikal/Specific/db
 
               # Write Baikal configuration
               # IMPORTANT: admin_passwordhash and timezone are REQUIRED
-              # IMPORTANT: sqlite_file MUST be absolute path (PHP runs from /var/www/baikal/html)
+              # IMPORTANT: sqlite_file points to shared DAV database created by worker
               echo "Writing baikal.yaml configuration..."
               cat > /var/www/baikal/config/baikal.yaml << 'YAML'
               system:
@@ -55,14 +60,15 @@ spec:
                 timezone: {{ .Values.dav.baikal.config.timezone | default "UTC" }}
               database:
                 backend: sqlite
-                sqlite_file: /var/www/baikal/Specific/db/db.sqlite
+                sqlite_file: /dav-data/db/db.sqlite
                 encryption_key: ''
               logger:
                 log_path: ''
               YAML
 
               # Initialize SQLite database if it doesn't exist
-              DB_FILE="/var/www/baikal/Specific/db/db.sqlite"
+              # NOTE: This database is shared with the worker via kurrier-dav-data PVC
+              DB_FILE="/dav-data/db/db.sqlite"
               if [ ! -f "$DB_FILE" ]; then
                 echo "Initializing Baikal SQLite database..."
 
@@ -220,15 +226,18 @@ spec:
               fi
 
               # Ensure correct permissions (nginx user in baikal container is uid 101)
+              # The shared dav-data volume is also used by worker (uid 1000)
               chown -R 101:101 /var/www/baikal/config /var/www/baikal/Specific
-              chmod 755 /var/www/baikal/Specific/db
-              chmod 664 "$DB_FILE"
+              chmod 777 /dav-data/db
+              chmod 666 "$DB_FILE" 2>/dev/null || true
 
               echo "=== Baikal Initialization Complete ==="
           volumeMounts:
             - name: config
               mountPath: /var/www/baikal/config
-            - name: data
+            - name: dav-data
+              mountPath: /dav-data
+            - name: specific
               mountPath: /var/www/baikal/Specific
       containers:
         - name: baikal
@@ -241,7 +250,9 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /var/www/baikal/config
-            - name: data
+            - name: dav-data
+              mountPath: /dav-data
+            - name: specific
               mountPath: /var/www/baikal/Specific
           # Use TCP probe since /dav.php/ returns 401 without auth (which fails HTTP probe)
           livenessProbe:
@@ -261,6 +272,15 @@ spec:
       volumes:
         - name: config
           emptyDir: {}
+        - name: specific
+          emptyDir: {}
+        - name: dav-data
+          {{- if .Values.dav.worker.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "kurrier.fullname" . }}-dav-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
       {{- with .Values.dav.baikal.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -273,20 +293,6 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-  {{- if .Values.dav.baikal.persistence.enabled }}
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes:
-          {{- toYaml .Values.dav.baikal.persistence.accessModes | nindent 10 }}
-        {{- if or .Values.global.storageClass .Values.dav.baikal.persistence.storageClass }}
-        storageClassName: {{ .Values.dav.baikal.persistence.storageClass | default .Values.global.storageClass }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ .Values.dav.baikal.persistence.size }}
-  {{- end }}
 ---
 apiVersion: v1
 kind: Service
