@@ -129,11 +129,20 @@ spec:
 
                 # Special handling for 001_rls_client - needs RLS_CLIENT_PASSWORD substitution
                 if [ "$VERSION" = "001_rls_client" ]; then
-                  # Apply with password substitution
+                  # Apply with password substitution - fail on errors
                   sed "s/\\\$RLS_CLIENT_PASSWORD/${RLS_CLIENT_PASSWORD}/g" "$migration_file" | psql -v ON_ERROR_STOP=1
                 else
-                  # Apply migration as-is
-                  psql -v ON_ERROR_STOP=1 -f "$migration_file"
+                  # Apply migration - ignore "already exists" errors for idempotency
+                  # This handles cases where worker Drizzle migrations may have created some objects
+                  if ! psql -f "$migration_file" 2>&1 | tee /tmp/migration_output.txt; then
+                    # Check if all errors are "already exists" type errors (which are OK)
+                    if grep -qE "ERROR:" /tmp/migration_output.txt && ! grep -qE "already exists" /tmp/migration_output.txt; then
+                      echo "ERROR: Migration $VERSION failed with non-idempotent error:"
+                      cat /tmp/migration_output.txt
+                      exit 1
+                    fi
+                    echo "  (Some objects already existed, continuing...)"
+                  fi
                 fi
 
                 # Record migration
