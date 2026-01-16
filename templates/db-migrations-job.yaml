@@ -67,12 +67,12 @@ spec:
 
               # Wait for storage schema to exist (created by storage service)
               echo "Waiting for storage.buckets table..."
-              for i in $(seq 1 60); do
+              for i in $(seq 1 120); do
                 if psql -c "SELECT 1 FROM storage.buckets LIMIT 1" 2>/dev/null; then
                   echo "Storage schema ready!"
                   break
                 fi
-                echo "Waiting for storage schema... ($i/60)"
+                echo "Waiting for storage schema... ($i/120)"
                 sleep 2
               done
 
@@ -84,74 +84,90 @@ spec:
                 );
               EOSQL
 
-              # Migration 001: RLS Client and Storage Bucket
-              # This sets up infrastructure that Kurrier needs to work with Supabase:
-              # - The rls_client user for Row Level Security
-              # - The attachments storage bucket
-              # - Storage policies for user-owned file access
-              if ! psql -tAc "SELECT 1 FROM migrations WHERE version = '001_rls_client'" | grep -q 1; then
-                echo "Applying migration 001_rls_client..."
-                psql -v ON_ERROR_STOP=1 <<-EOSQL
-                  -- Create policy helper function
-                  CREATE OR REPLACE FUNCTION public.__ensure_policy(p_name text, p_rel regclass, p_sql text)
-                  RETURNS void LANGUAGE plpgsql AS \$\$
-                  BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM pg_policy WHERE polname = p_name AND polrelid = p_rel) THEN
-                      EXECUTE p_sql;
-                    END IF;
-                  END\$\$;
+              # Download migrations from Kurrier repo
+              MIGRATIONS_URL="https://raw.githubusercontent.com/kurrier-org/kurrier/main/db/init/migrations"
+              MIGRATIONS_DIR="/tmp/migrations"
+              mkdir -p "$MIGRATIONS_DIR"
 
-                  -- Create RLS client user if not exists
-                  DO \$\$
-                  BEGIN
-                    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'rls_client') THEN
-                      CREATE USER rls_client
-                        WITH LOGIN PASSWORD '${RLS_CLIENT_PASSWORD}'
-                        NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
-                      GRANT anon TO rls_client;
-                      GRANT authenticated TO rls_client;
-                    END IF;
-                  END \$\$;
+              echo "Downloading Kurrier migrations..."
+              # List of known migrations (001-017)
+              for i in $(seq -w 1 17); do
+                MIGRATION_FILE="${i}_migration.sql"
+                # Handle 001 special case (different filename)
+                if [ "$i" = "01" ]; then
+                  MIGRATION_FILE="001_rls_client.sql"
+                fi
+                URL="${MIGRATIONS_URL}/${MIGRATION_FILE}"
+                echo "Downloading ${MIGRATION_FILE}..."
+                if curl -sf "$URL" -o "$MIGRATIONS_DIR/${MIGRATION_FILE}" 2>/dev/null; then
+                  echo "  Downloaded ${MIGRATION_FILE}"
+                else
+                  # Try alternate naming convention
+                  MIGRATION_FILE="0${i}_migration.sql"
+                  URL="${MIGRATIONS_URL}/${MIGRATION_FILE}"
+                  if curl -sf "$URL" -o "$MIGRATIONS_DIR/${MIGRATION_FILE}" 2>/dev/null; then
+                    echo "  Downloaded ${MIGRATION_FILE}"
+                  else
+                    echo "  Migration ${i} not found, skipping"
+                  fi
+                fi
+              done
 
-                  -- Create attachments bucket if not exists
-                  INSERT INTO storage.buckets (id, name, public)
-                  VALUES ('attachments', 'attachments', false)
-                  ON CONFLICT (id) DO NOTHING;
+              # Apply migrations in order
+              echo ""
+              echo "Applying migrations..."
+              for migration_file in $(ls -1 "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort); do
+                VERSION=$(basename "$migration_file" .sql)
 
-                  -- Storage RLS policies
-                  SELECT public.__ensure_policy(
-                    'private-own-crud',
-                    'storage.objects'::regclass,
-                    \$policy\$
-                      CREATE POLICY "private-own-crud" ON storage.objects
-                      FOR ALL TO authenticated
-                      USING (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'private' AND (storage.foldername(name))[2] = auth.uid()::text)
-                      WITH CHECK (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'private' AND (storage.foldername(name))[2] = auth.uid()::text)
-                    \$policy\$
-                  );
+                # Check if already applied
+                if psql -tAc "SELECT 1 FROM migrations WHERE version = '$VERSION'" | grep -q 1; then
+                  echo "Migration $VERSION already applied, skipping."
+                  continue
+                fi
 
-                  SELECT public.__ensure_policy(
-                    'eml-own-crud',
-                    'storage.objects'::regclass,
-                    \$policy\$
-                      CREATE POLICY "eml-own-crud" ON storage.objects
-                      FOR ALL TO authenticated
-                      USING (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'eml' AND (storage.foldername(name))[2] = auth.uid()::text)
-                      WITH CHECK (bucket_id = 'attachments' AND (storage.foldername(name))[1] = 'eml' AND (storage.foldername(name))[2] = auth.uid()::text)
-                    \$policy\$
-                  );
+                echo "Applying migration $VERSION..."
 
-                  -- Record migration
-                  INSERT INTO migrations (version) VALUES ('001_rls_client');
+                # Special handling for 001_rls_client - needs RLS_CLIENT_PASSWORD substitution
+                if [ "$VERSION" = "001_rls_client" ]; then
+                  # Apply with password substitution
+                  sed "s/\\\$RLS_CLIENT_PASSWORD/${RLS_CLIENT_PASSWORD}/g" "$migration_file" | psql -v ON_ERROR_STOP=1
+                else
+                  # Apply migration as-is
+                  psql -v ON_ERROR_STOP=1 -f "$migration_file"
+                fi
+
+                # Record migration
+                psql -c "INSERT INTO migrations (version) VALUES ('$VERSION');"
+                echo "Migration $VERSION applied."
+              done
+
+              # Grant permissions to authenticated/anon/service_role for Kurrier app tables
+              # This ensures RLS policies work correctly
+              echo ""
+              echo "Granting permissions to Supabase roles..."
+              psql -v ON_ERROR_STOP=1 <<-'EOSQL'
+                -- Grant schema permissions for Kurrier app tables
+                GRANT USAGE ON SCHEMA public TO authenticated, anon, service_role;
+
+                -- Grant table permissions (for existing tables)
+                GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
+                GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+                GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, anon, service_role;
+
+                -- Set default privileges for future tables created by postgres user
+                ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+                  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated, service_role;
+                ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+                  GRANT SELECT ON TABLES TO anon;
+                ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+                  GRANT USAGE, SELECT ON SEQUENCES TO authenticated, anon, service_role;
               EOSQL
-                echo "Migration 001_rls_client applied."
-              else
-                echo "Migration 001_rls_client already applied, skipping."
-              fi
 
-              # Note: Additional migrations for Kurrier application tables (providers, smtp_accounts,
-              # mail_rules, etc.) are handled by the Kurrier application itself via Drizzle ORM.
-              # This job only sets up the Supabase infrastructure prerequisites.
-
+              echo ""
               echo "All migrations complete!"
+
+              # List applied migrations
+              echo ""
+              echo "Applied migrations:"
+              psql -c "SELECT version, applied_at FROM migrations ORDER BY version;"
 {{- end }}
