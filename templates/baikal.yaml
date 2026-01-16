@@ -243,16 +243,15 @@ spec:
               mountPath: /var/www/baikal/config
             - name: data
               mountPath: /var/www/baikal/Specific
+          # Use TCP probe since /dav.php/ returns 401 without auth (which fails HTTP probe)
           livenessProbe:
-            httpGet:
-              path: /dav.php/
+            tcpSocket:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
           readinessProbe:
-            httpGet:
-              path: /dav.php/
+            tcpSocket:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
