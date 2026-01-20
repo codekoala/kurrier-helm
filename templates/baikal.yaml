@@ -10,6 +10,10 @@ metadata:
     {{- include "kurrier.baikal.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.dav.baikal.replicaCount }}
+  {{- with .Values.dav.baikal.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "kurrier.baikal.selectorLabels" . | nindent 6 }}

@@ -7,6 +7,10 @@ metadata:
     {{- include "kurrier.storage.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.supabase.storage.replicaCount }}
+  {{- with .Values.supabase.storage.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "kurrier.storage.selectorLabels" . | nindent 6 }}
