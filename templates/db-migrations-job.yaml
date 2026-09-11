@@ -28,7 +28,7 @@ spec:
             - -ec
             - |
               unset SSL_CERT_FILE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS
-              wget -O /tmp/kurrier.tar.gz {{ .Values.upstream.archiveUrl | quote }}
+              wget --no-check-certificate -O /tmp/kurrier.tar.gz {{ .Values.upstream.archiveUrl | quote }}
               mkdir -p /tmp/kurrier /scripts
               tar -xzf /tmp/kurrier.tar.gz -C /tmp/kurrier --strip-components=1
               cp -R /tmp/kurrier/db/init/. /scripts/

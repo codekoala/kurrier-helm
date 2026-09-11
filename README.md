@@ -85,5 +85,8 @@ Optional keys:
 - The migration Job currently downloads the pinned upstream source archive at
   install/upgrade time. Vendoring the migration SQL files into the chart would
   remove that runtime GitHub dependency.
+- The downloader init containers use `wget --no-check-certificate` because the
+  minimal Alpine downloader image does not ship a complete public CA store in
+  this cluster after CA injection. The archive URL is pinned by chart values.
 - Stateful data restore from older Kurrier/Supabase deployments should be planned
   separately; do not mount old PVC data into this v4 chart without schema review.
