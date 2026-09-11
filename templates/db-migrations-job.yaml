@@ -1,182 +1,63 @@
-{{- if and .Values.supabase.enabled .Values.supabase.db.enabled (not .Values.externalPostgresql.enabled) }}
+{{- if and .Values.migrations.enabled .Values.postgres.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "kurrier.fullname" . }}-db-migrations
+  name: {{ include "kurrier.fullname" . }}-migrate
   labels:
-    {{- include "kurrier.labels" . | nindent 4 }}
-    app.kubernetes.io/component: db-migrations
+    {{- include "kurrier.componentLabels" (dict "root" . "component" "migrate") | nindent 4 }}
   annotations:
-    # Run after install/upgrade
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
-  ttlSecondsAfterFinished: 600
-  backoffLimit: 3
+  ttlSecondsAfterFinished: {{ .Values.migrations.ttlSecondsAfterFinished }}
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
   template:
     metadata:
       labels:
-        {{- include "kurrier.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: db-migrations
+        {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "migrate") | nindent 8 }}
     spec:
       restartPolicy: OnFailure
-      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" nil) | nindent 6 }}
+      {{- include "kurrier.imagePullSecrets" . | nindent 6 }}
       initContainers:
-        # Wait for database to be ready
-        - name: wait-for-db
-          image: busybox:latest
+        - name: fetch-migrations
+          image: {{ printf "%s:%s" .Values.migrations.downloaderImage.repository .Values.migrations.downloaderImage.tag | quote }}
+          imagePullPolicy: {{ .Values.migrations.downloaderImage.pullPolicy }}
           command:
             - sh
-            - -c
+            - -ec
             - |
-              echo "Waiting for database to be ready..."
-              until nc -z {{ include "kurrier.fullname" . }}-db 5432; do
-                echo "Database not ready, waiting..."
-                sleep 2
-              done
-              echo "Database is ready!"
+              wget -O /tmp/kurrier.tar.gz {{ .Values.upstream.archiveUrl | quote }}
+              mkdir -p /tmp/kurrier /scripts
+              tar -xzf /tmp/kurrier.tar.gz -C /tmp/kurrier --strip-components=1
+              cp -R /tmp/kurrier/db/init/. /scripts/
+              chmod +x /scripts/db-bootstrap.sh
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
       containers:
-        - name: migrations
-          image: "{{ .Values.supabase.db.image.repository }}:{{ .Values.supabase.db.image.tag }}"
+        - name: migrate
+          image: {{ include "kurrier.image" (dict "root" . "image" .Values.migrations.image) | quote }}
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - /scripts/db-bootstrap.sh
           env:
             - name: PGHOST
-              value: {{ include "kurrier.fullname" . }}-db
-            - name: PGPORT
-              value: "5432"
-            - name: PGDATABASE
-              value: {{ .Values.supabase.db.database | quote }}
+              value: {{ include "kurrier.postgres.serviceName" . | quote }}
             - name: PGUSER
-              value: "postgres"
+              value: {{ .Values.postgres.user | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kurrier.postgresql.secretName" . }}
-                  key: {{ include "kurrier.postgresql.secretKey" . }}
-            - name: RLS_CLIENT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.rls.secretName" . }}
-                  key: {{ .Values.kurrier.rls.secretKey }}
-          command:
-            - bash
-            - -c
-            - |
-              set -e
-              echo "Running Kurrier database migrations..."
-
-              # Wait for storage schema to exist (created by storage service)
-              echo "Waiting for storage.buckets table..."
-              for i in $(seq 1 120); do
-                if psql -c "SELECT 1 FROM storage.buckets LIMIT 1" 2>/dev/null; then
-                  echo "Storage schema ready!"
-                  break
-                fi
-                echo "Waiting for storage schema... ($i/120)"
-                sleep 2
-              done
-
-              # Create migrations tracking table
-              psql -v ON_ERROR_STOP=1 <<-'EOSQL'
-                CREATE TABLE IF NOT EXISTS public.migrations (
-                  version TEXT PRIMARY KEY,
-                  applied_at TIMESTAMPTZ DEFAULT NOW()
-                );
-              EOSQL
-
-              # Download migrations from Kurrier repo
-              MIGRATIONS_URL="https://raw.githubusercontent.com/kurrier-org/kurrier/main/db/init/migrations"
-              MIGRATIONS_DIR="/tmp/migrations"
-              mkdir -p "$MIGRATIONS_DIR"
-
-              echo "Downloading Kurrier migrations..."
-              # List of known migrations (001-017)
-              for i in $(seq -w 1 17); do
-                MIGRATION_FILE="${i}_migration.sql"
-                # Handle 001 special case (different filename)
-                if [ "$i" = "01" ]; then
-                  MIGRATION_FILE="001_rls_client.sql"
-                fi
-                URL="${MIGRATIONS_URL}/${MIGRATION_FILE}"
-                echo "Downloading ${MIGRATION_FILE}..."
-                if curl -sf "$URL" -o "$MIGRATIONS_DIR/${MIGRATION_FILE}" 2>/dev/null; then
-                  echo "  Downloaded ${MIGRATION_FILE}"
-                else
-                  # Try alternate naming convention
-                  MIGRATION_FILE="0${i}_migration.sql"
-                  URL="${MIGRATIONS_URL}/${MIGRATION_FILE}"
-                  if curl -sf "$URL" -o "$MIGRATIONS_DIR/${MIGRATION_FILE}" 2>/dev/null; then
-                    echo "  Downloaded ${MIGRATION_FILE}"
-                  else
-                    echo "  Migration ${i} not found, skipping"
-                  fi
-                fi
-              done
-
-              # Apply migrations in order
-              echo ""
-              echo "Applying migrations..."
-              for migration_file in $(ls -1 "$MIGRATIONS_DIR"/*.sql 2>/dev/null | sort); do
-                VERSION=$(basename "$migration_file" .sql)
-
-                # Check if already applied
-                if psql -tAc "SELECT 1 FROM migrations WHERE version = '$VERSION'" | grep -q 1; then
-                  echo "Migration $VERSION already applied, skipping."
-                  continue
-                fi
-
-                echo "Applying migration $VERSION..."
-
-                # Special handling for 001_rls_client - needs RLS_CLIENT_PASSWORD substitution
-                if [ "$VERSION" = "001_rls_client" ]; then
-                  # Apply with password substitution - fail on errors
-                  sed "s/\\\$RLS_CLIENT_PASSWORD/${RLS_CLIENT_PASSWORD}/g" "$migration_file" | psql -v ON_ERROR_STOP=1
-                else
-                  # Apply migration - ignore "already exists" errors for idempotency
-                  # This handles cases where worker Drizzle migrations may have created some objects
-                  if ! psql -f "$migration_file" 2>&1 | tee /tmp/migration_output.txt; then
-                    # Check if all errors are "already exists" type errors (which are OK)
-                    if grep -qE "ERROR:" /tmp/migration_output.txt && ! grep -qE "already exists" /tmp/migration_output.txt; then
-                      echo "ERROR: Migration $VERSION failed with non-idempotent error:"
-                      cat /tmp/migration_output.txt
-                      exit 1
-                    fi
-                    echo "  (Some objects already existed, continuing...)"
-                  fi
-                fi
-
-                # Record migration
-                psql -c "INSERT INTO migrations (version) VALUES ('$VERSION');"
-                echo "Migration $VERSION applied."
-              done
-
-              # Grant permissions to authenticated/anon/service_role for Kurrier app tables
-              # This ensures RLS policies work correctly
-              echo ""
-              echo "Granting permissions to Supabase roles..."
-              psql -v ON_ERROR_STOP=1 <<-'EOSQL'
-                -- Grant schema permissions for Kurrier app tables
-                GRANT USAGE ON SCHEMA public TO authenticated, anon, service_role;
-
-                -- Grant table permissions (for existing tables)
-                GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
-                GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
-                GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, anon, service_role;
-
-                -- Set default privileges for future tables created by postgres user
-                ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-                  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated, service_role;
-                ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-                  GRANT SELECT ON TABLES TO anon;
-                ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-                  GRANT USAGE, SELECT ON SEQUENCES TO authenticated, anon, service_role;
-              EOSQL
-
-              echo ""
-              echo "All migrations complete!"
-
-              # List applied migrations
-              echo ""
-              echo "Applied migrations:"
-              psql -c "SELECT version, applied_at FROM migrations ORDER BY version;"
+                  name: {{ include "kurrier.secretName" . }}
+                  key: POSTGRES_PASSWORD
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          emptyDir: {}
 {{- end }}

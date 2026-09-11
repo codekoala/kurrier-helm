@@ -1,236 +1,121 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "kurrier.fullname" . }}-config
+  name: {{ include "kurrier.configName" . }}
   labels:
     {{- include "kurrier.labels" . | nindent 4 }}
 data:
-  # PostgreSQL configuration
-  POSTGRES_HOST: {{ include "kurrier.postgresql.host" . | quote }}
-  POSTGRES_PORT: {{ include "kurrier.postgresql.port" . | quote }}
-  POSTGRES_DB: {{ include "kurrier.postgresql.database" . | quote }}
-  
-  # Redis configuration
-  REDIS_HOST: {{ include "kurrier.redis.host" . | quote }}
-  REDIS_PORT: {{ include "kurrier.redis.port" . | quote }}
-  
-  # Typesense configuration
-  {{- if .Values.typesense.enabled }}
-  TYPESENSE_HOST: {{ include "kurrier.typesense.host" . | quote }}
+  WEB_PORT: {{ .Values.config.webPort | quote }}
+  WEB_URL: {{ .Values.config.webUrl | quote }}
+  NITRO_PORT: {{ .Values.config.nitroPort | quote }}
+  DISABLE_DRIVE: {{ .Values.config.disableDrive | quote }}
+  DISABLE_LOCAL_LOGIN: {{ .Values.config.disableLocalLogin | quote }}
+  LOCAL_TUNNEL_URL: {{ .Values.config.localTunnelUrl | quote }}
+  REDIS_HOST: {{ include "kurrier.redis.serviceName" . | quote }}
+  REDIS_PORT: {{ .Values.redis.service.port | quote }}
   TYPESENSE_PORT: {{ .Values.typesense.service.port | quote }}
   TYPESENSE_PROTOCOL: "http"
-  {{- end }}
-  
-  # Kurrier configuration
-  WEB_URL: {{ .Values.kurrier.webUrl | quote }}
-  API_URL: {{ .Values.kurrier.apiUrl | quote }}
-  # API_PUBLIC_URL is used by the browser to reach Supabase API endpoints
-  # Must be a publicly accessible URL (not internal service URL)
-  API_PUBLIC_URL: {{ .Values.kurrier.apiPublicUrl | quote }}
-  {{- if .Values.kurrier.localTunnelUrl }}
-  LOCAL_TUNNEL_URL: {{ .Values.kurrier.localTunnelUrl | quote }}
-  {{- end }}
-  
-  # Supabase services configuration
-  {{- if .Values.supabase.enabled }}
-  KONG_HTTP_PORT: {{ .Values.supabase.kong.service.httpPort | quote }}
-  {{- if .Values.supabase.auth.enabled }}
-  AUTH_URL: {{ printf "http://%s:%d" (include "kurrier.auth.serviceName" .) (.Values.supabase.auth.service.port | int) | quote }}
-  GOTRUE_URL: {{ printf "http://%s:%d" (include "kurrier.auth.serviceName" .) (.Values.supabase.auth.service.port | int) | quote }}
-  {{- end }}
-  {{- if .Values.supabase.rest.enabled }}
-  REST_URL: {{ printf "http://%s:%d" (include "kurrier.rest.serviceName" .) (.Values.supabase.rest.service.port | int) | quote }}
-  {{- end }}
-  {{- if .Values.supabase.realtime.enabled }}
-  REALTIME_URL: {{ printf "http://%s:%d" (include "kurrier.realtime.serviceName" .) (.Values.supabase.realtime.service.port | int) | quote }}
-  {{- end }}
-  {{- if .Values.supabase.storage.enabled }}
-  STORAGE_URL: {{ printf "http://%s:%d" (include "kurrier.storage.serviceName" .) (.Values.supabase.storage.service.port | int) | quote }}
-  {{- end }}
-  {{- if .Values.supabase.meta.enabled }}
-  META_URL: {{ printf "http://%s:%d" (include "kurrier.meta.serviceName" .) (.Values.supabase.meta.service.port | int) | quote }}
-  {{- end }}
-  {{- end }}
-  
-  # DAV configuration (Baikal)
-  {{- if and .Values.dav.enabled .Values.dav.baikal.enabled }}
-  BAIKAL_URL: {{ printf "http://%s:%d" (include "kurrier.baikal.serviceName" .) (.Values.dav.baikal.service.port | int) | quote }}
-  {{- end }}
+  TYPESENSE_HOST: {{ include "kurrier.typesense.serviceName" . | quote }}
+  DOCS_PORT: "3002"
+  DOCS_URL: {{ .Values.config.docsUrl | quote }}
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  POSTGRES_PORT: {{ .Values.postgres.service.port | quote }}
+  POSTGRES_HOST: {{ include "kurrier.postgres.serviceName" . | quote }}
+  SEARCH_REBUILD_ON_BOOT: {{ .Values.config.searchRebuildOnBoot | quote }}
+  DAV_URL: {{ .Values.config.davUrl | quote }}
+  WORKER_URL: {{ default (printf "http://%s:%v" (include "kurrier.worker.serviceName" .) .Values.worker.service.port) .Values.config.workerUrl | quote }}
+  HOST: {{ .Values.config.host | quote }}
+  GARAGE_BUCKET: {{ .Values.garage.bucket | quote }}
+  S3_ENDPOINT: {{ printf "http://%s:%v" (include "kurrier.garage.serviceName" .) .Values.garage.service.s3Port | quote }}
+  S3_BUCKET: {{ .Values.garage.bucket | quote }}
+  S3_REGION: {{ .Values.garage.region | quote }}
+  S3_FORCE_PATH_STYLE: "true"
+  OIDC_GOOGLE_CLIENT_ID: {{ .Values.config.oidc.googleClientId | quote }}
+  OIDC_ISSUER_URL: {{ .Values.config.oidc.issuerUrl | quote }}
+  OIDC_CLIENT_ID: {{ .Values.config.oidc.clientId | quote }}
+  OIDC_PROVIDER_NAME: {{ .Values.config.oidc.providerName | quote }}
+  OIDC_SCOPES: {{ .Values.config.oidc.scopes | quote }}
+  OIDC_TOKEN_AUTH_METHOD: {{ .Values.config.oidc.tokenAuthMethod | quote }}
+  OIDC_REQUIRE_VERIFIED_EMAIL: {{ .Values.config.oidc.requireVerifiedEmail | quote }}
+  CUSTOM_EMAIL_PROVIDERS: {{ .Values.config.customEmailProviders | quote }}
 ---
-{{- if and .Values.supabase.enabled .Values.supabase.kong.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "kurrier.fullname" . }}-kong
+  name: {{ include "kurrier.fullname" . }}-bootstrap
   labels:
-    {{- include "kurrier.kong.labels" . | nindent 4 }}
+    {{- include "kurrier.labels" . | nindent 4 }}
 data:
-  kong.yml: |
-    _format_version: "2.1"
-    _transform: true
-    
-    ###
-    ### Consumers / Credentials
-    ###
-    consumers:
-      - username: anon
-        keyauth_credentials:
-          - key: ${SUPABASE_ANON_KEY}
-      - username: service_role
-        keyauth_credentials:
-          - key: ${SUPABASE_SERVICE_KEY}
-    
-    ###
-    ### Access Control List
-    ###
-    acls:
-      - consumer: anon
-        group: anon
-      - consumer: service_role
-        group: admin
-    
-    ###
-    ### API Routes
-    ###
-    services:
-      {{- if .Values.supabase.auth.enabled }}
-      ## Auth
-      - name: auth-v1-open
-        url: http://{{ include "kurrier.auth.serviceName" . }}:{{ .Values.supabase.auth.service.port }}/verify
-        routes:
-          - name: auth-v1-open
-            strip_path: true
-            paths:
-              - /auth/v1/verify
-        plugins:
-          - name: cors
-      - name: auth-v1-open-callback
-        url: http://{{ include "kurrier.auth.serviceName" . }}:{{ .Values.supabase.auth.service.port }}/callback
-        routes:
-          - name: auth-v1-open-callback
-            strip_path: true
-            paths:
-              - /auth/v1/callback
-        plugins:
-          - name: cors
-      - name: auth-v1-open-authorize
-        url: http://{{ include "kurrier.auth.serviceName" . }}:{{ .Values.supabase.auth.service.port }}/authorize
-        routes:
-          - name: auth-v1-open-authorize
-            strip_path: true
-            paths:
-              - /auth/v1/authorize
-        plugins:
-          - name: cors
-      - name: auth-v1
-        _comment: "GoTrue: /auth/v1/* -> http://auth:9999/*"
-        url: http://{{ include "kurrier.auth.serviceName" . }}:{{ .Values.supabase.auth.service.port }}/
-        routes:
-          - name: auth-v1-all
-            strip_path: true
-            paths:
-              - /auth/v1/
-        plugins:
-          - name: cors
-          - name: key-auth
-            config:
-              hide_credentials: false
-          - name: acl
-            config:
-              hide_groups_header: true
-              allow:
-                - admin
-                - anon
-      {{- end }}
-      
-      {{- if .Values.supabase.rest.enabled }}
-      ## REST
-      - name: rest-v1
-        _comment: "PostgREST: /rest/v1/* -> http://rest:3000/*"
-        url: http://{{ include "kurrier.rest.serviceName" . }}:{{ .Values.supabase.rest.service.port }}/
-        routes:
-          - name: rest-v1-all
-            strip_path: true
-            paths:
-              - /rest/v1/
-        plugins:
-          - name: cors
-          - name: key-auth
-            config:
-              hide_credentials: false
-          - name: acl
-            config:
-              hide_groups_header: true
-              allow:
-                - admin
-                - anon
-      {{- end }}
-      
-      {{- if .Values.supabase.realtime.enabled }}
-      ## Realtime
-      - name: realtime-v1-ws
-        _comment: "Realtime: /realtime/v1/* -> ws://realtime:4000/socket/*"
-        url: http://{{ include "kurrier.realtime.serviceName" . }}:{{ .Values.supabase.realtime.service.port }}/socket
-        routes:
-          - name: realtime-v1-ws
-            strip_path: true
-            paths:
-              - /realtime/v1/
-        plugins:
-          - name: cors
-          - name: key-auth
-            config:
-              hide_credentials: false
-          - name: acl
-            config:
-              hide_groups_header: true
-              allow:
-                - admin
-                - anon
-      {{- end }}
-      
-      {{- if .Values.supabase.storage.enabled }}
-      ## Storage
-      - name: storage-v1
-        _comment: "Storage: /storage/v1/* -> http://storage:5000/*"
-        url: http://{{ include "kurrier.storage.serviceName" . }}:{{ .Values.supabase.storage.service.port }}/
-        routes:
-          - name: storage-v1-all
-            strip_path: true
-            paths:
-              - /storage/v1/
-        plugins:
-          - name: cors
-          - name: key-auth
-            config:
-              hide_credentials: false
-          - name: acl
-            config:
-              hide_groups_header: true
-              allow:
-                - admin
-                - anon
-      {{- end }}
-      
-      {{- if .Values.supabase.meta.enabled }}
-      ## Meta
-      - name: meta
-        _comment: "pg-meta: /pg/* -> http://meta:8080/*"
-        url: http://{{ include "kurrier.meta.serviceName" . }}:{{ .Values.supabase.meta.service.port }}/
-        routes:
-          - name: meta-all
-            strip_path: true
-            paths:
-              - /pg/
-        plugins:
-          - name: cors
-          - name: key-auth
-            config:
-              hide_credentials: false
-          - name: acl
-            config:
-              hide_groups_header: true
-              allow:
-                - admin
-      {{- end }}
-{{- end }}
+  postgres-init.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<SQL
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'kurrier') THEN
+        EXECUTE format('CREATE ROLE kurrier LOGIN PASSWORD %L', '${POSTGRES_PASSWORD}');
+      ELSE
+        EXECUTE format('ALTER ROLE kurrier LOGIN PASSWORD %L', '${POSTGRES_PASSWORD}');
+      END IF;
+    END
+    \$\$;
+
+    CREATE SCHEMA IF NOT EXISTS auth;
+    ALTER SCHEMA public OWNER TO kurrier;
+    ALTER SCHEMA auth OWNER TO kurrier;
+    GRANT ALL ON SCHEMA public TO kurrier;
+    GRANT ALL ON SCHEMA auth TO kurrier;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO kurrier;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA auth TO kurrier;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO kurrier;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA auth TO kurrier;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO kurrier;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO kurrier;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON TABLES TO kurrier;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA auth GRANT ALL ON SEQUENCES TO kurrier;
+    SQL
+  baikal.yaml.template: |
+    system:
+        configured_version: 0.10.1
+        timezone: {{ .Values.dav.config.timezone }}
+        card_enabled: true
+        cal_enabled: true
+        dav_auth_type: Digest
+        admin_passwordhash: ${BAIKAL_ADMIN_PASSWORD_HASH}
+        failed_access_message: 'user %u authentication failure for Baikal'
+        auth_realm: {{ .Values.dav.config.authRealm }}
+        base_uri: ''
+        invite_from: {{ .Values.dav.config.inviteFrom }}
+    database:
+        sqlite_file: /var/www/baikal/Specific/db/db.sqlite
+        backend: pgsql
+        mysql_host: ''
+        mysql_dbname: ''
+        mysql_username: ''
+        mysql_password: ''
+        encryption_key: ${BAIKAL_ENCRYPTION_KEY}
+        pgsql_host: {{ include "kurrier.baikalPostgres.serviceName" . }}
+        pgsql_dbname: {{ .Values.baikalPostgres.database }}
+        pgsql_username: {{ .Values.baikalPostgres.user }}
+        pgsql_password: ${BAIKAL_POSTGRES_PASSWORD}
+  garage.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+    db_engine = "sqlite"
+    replication_factor = 1
+    consistency_mode = "consistent"
+    rpc_bind_addr = "[::]:{{ .Values.garage.service.rpcPort }}"
+    rpc_public_addr = "127.0.0.1:{{ .Values.garage.service.rpcPort }}"
+
+    [s3_api]
+    s3_region = "{{ .Values.garage.region }}"
+    api_bind_addr = "[::]:{{ .Values.garage.service.s3Port }}"
+
+    [s3_web]
+    bind_addr = "[::]:{{ .Values.garage.service.webPort }}"
+    root_domain = "localhost"
+
+    [admin]
+    api_bind_addr = "[::]:{{ .Values.garage.service.adminPort }}"

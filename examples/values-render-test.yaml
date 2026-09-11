@@ -1,0 +1,47 @@
+global:
+  storageClass: standard
+
+config:
+  webUrl: https://kurrier.example.test
+  davUrl: https://kurrier-dav.example.test
+
+secrets:
+  postgresPassword: test-postgres-password
+  baikalPostgresPassword: test-baikal-postgres-password
+  redisPassword: test-redis-password
+  typesenseApiKey: test-typesense-api-key
+  jwtSecret: test-jwt-secret-at-least-32-characters
+  appSecretEncryptionKey: test-app-secret-encryption-key
+  garageRpcSecret: test-garage-rpc-secret
+  garageAccessKey: test-garage-access-key
+  garageSecretKey: test-garage-secret-key
+  baikalEncryptionKey: test-baikal-encryption-key
+  baikalAdminPasswordHash: test-baikal-admin-password-hash
+
+dav:
+  config:
+    timezone: UTC
+
+ingress:
+  enabled: true
+  className: pomerium
+  annotations:
+    ingress.pomerium.io/preserve_host_header: "true"
+  hosts:
+    - host: kurrier.example.test
+      paths:
+        - path: /
+          pathType: Prefix
+          service: web
+    - host: kurrier-dav.example.test
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dav
+  tls:
+    - secretName: kurrier-tls
+      hosts:
+        - kurrier.example.test
+    - secretName: kurrier-dav-tls
+      hosts:
+        - kurrier-dav.example.test

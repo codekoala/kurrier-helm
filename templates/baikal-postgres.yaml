@@ -1,0 +1,131 @@
+{{- if .Values.baikalPostgres.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kurrier.fullname" . }}-baikal-postgres
+  labels:
+    {{- include "kurrier.componentLabels" (dict "root" . "component" "baikal-postgres") | nindent 4 }}
+spec:
+  serviceName: {{ include "kurrier.baikalPostgres.serviceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "baikal-postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "baikal-postgres") | nindent 8 }}
+    spec:
+      {{- include "kurrier.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: fetch-baikal-schema
+          image: {{ printf "%s:%s" .Values.migrations.downloaderImage.repository .Values.migrations.downloaderImage.tag | quote }}
+          imagePullPolicy: {{ .Values.migrations.downloaderImage.pullPolicy }}
+          command:
+            - sh
+            - -ec
+            - |
+              wget -O /tmp/kurrier.tar.gz {{ .Values.upstream.archiveUrl | quote }}
+              mkdir -p /tmp/kurrier /bootstrap
+              tar -xzf /tmp/kurrier.tar.gz -C /tmp/kurrier --strip-components=1
+              cp /tmp/kurrier/db/init/baikal-init/baikal.sql /bootstrap/01-baikal.sql
+          volumeMounts:
+            - name: initdb
+              mountPath: /bootstrap
+      containers:
+        - name: postgres
+          image: {{ include "kurrier.image" (dict "root" . "image" .Values.baikalPostgres.image) | quote }}
+          imagePullPolicy: {{ .Values.baikalPostgres.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.baikalPostgres.user | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.baikalPostgres.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: BAIKAL_POSTGRES_PASSWORD
+          args:
+            - -c
+            - shared_buffers=128MB
+            - -c
+            - max_connections=100
+            - -c
+            - work_mem=4MB
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.baikalPostgres.user | quote }}
+                - -d
+                - {{ .Values.baikalPostgres.database | quote }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.baikalPostgres.user | quote }}
+                - -d
+                - {{ .Values.baikalPostgres.database | quote }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.baikalPostgres.resources | nindent 12 }}
+      volumes:
+        - name: initdb
+          emptyDir: {}
+      {{- with .Values.baikalPostgres.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.baikalPostgres.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.baikalPostgres.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.baikalPostgres.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.baikalPostgres.persistence.accessModes | nindent 10 }}
+        {{- include "kurrier.storageClass" (dict "root" . "storageClass" .Values.baikalPostgres.persistence.storageClass) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.baikalPostgres.persistence.size }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kurrier.baikalPostgres.serviceName" . }}
+  labels:
+    {{- include "kurrier.componentLabels" (dict "root" . "component" "baikal-postgres") | nindent 4 }}
+spec:
+  type: {{ .Values.baikalPostgres.service.type }}
+  ports:
+    - name: postgresql
+      port: {{ .Values.baikalPostgres.service.port }}
+      targetPort: postgresql
+      protocol: TCP
+  selector:
+    {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "baikal-postgres") | nindent 4 }}
+{{- end }}

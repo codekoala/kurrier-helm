@@ -4,36 +4,28 @@ kind: Deployment
 metadata:
   name: {{ include "kurrier.fullname" . }}-worker
   labels:
-    {{- include "kurrier.worker.labels" . | nindent 4 }}
+    {{- include "kurrier.componentLabels" (dict "root" . "component" "worker") | nindent 4 }}
 spec:
   replicas: {{ .Values.worker.replicaCount }}
-  {{- with .Values.worker.strategy }}
-  strategy:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
   selector:
     matchLabels:
-      {{- include "kurrier.worker.selectorLabels" . | nindent 6 }}
+      {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
   template:
     metadata:
-      annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        checksum/secrets: {{ include (print $.Template.BasePath "/secrets.yaml") . | sha256sum }}
-        {{- with .Values.worker.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
       labels:
-        {{- include "kurrier.worker.selectorLabels" . | nindent 8 }}
+        {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "worker") | nindent 8 }}
+      {{- with .Values.worker.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
-      {{- include "kurrier.imagePullSecrets" (dict "Values" .Values "componentPullSecrets" .Values.worker.imagePullSecrets) | nindent 6 }}
       serviceAccountName: {{ include "kurrier.serviceAccountName" . }}
+      {{- include "kurrier.imagePullSecrets" . | nindent 6 }}
       securityContext:
-        {{- toYaml .Values.worker.podSecurityContext | nindent 8 }}
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: worker
-          securityContext:
-            {{- toYaml .Values.worker.securityContext | nindent 12 }}
-          image: "{{ .Values.global.imageRegistry }}{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "kurrier.image" (dict "root" . "image" .Values.worker.image) | quote }}
           imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
           ports:
             - name: http
@@ -41,115 +33,51 @@ spec:
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: {{ include "kurrier.fullname" . }}-config
+                name: {{ include "kurrier.configName" . }}
+            - secretRef:
+                name: {{ include "kurrier.secretName" . }}
           env:
-            # PostgreSQL
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "kurrier.postgresql.secretName" . }}
-                  key: {{ include "kurrier.postgresql.secretKey" . }}
+                  name: {{ include "kurrier.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: BAIKAL_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: BAIKAL_POSTGRES_PASSWORD
             - name: DATABASE_URL
-              value: "postgres://{{ include "kurrier.postgresql.username" . }}:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}"
-            # Redis
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.redis.secretName" . }}
-                  key: {{ include "kurrier.redis.secretKey" . }}
-            - name: REDIS_URL
-              value: "redis://:$(REDIS_PASSWORD)@{{ include "kurrier.redis.host" . }}:{{ include "kurrier.redis.port" . }}"
-            # Typesense
-            {{- if .Values.typesense.enabled }}
-            - name: TYPESENSE_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.typesense.secretName" . }}
-                  key: {{ .Values.typesense.secretKey }}
-            {{- end }}
-            # JWT
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.jwt.secretName" . }}
-                  key: {{ .Values.kurrier.jwt.secretKeys.jwtSecret }}
-            - name: ANON_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.jwt.secretName" . }}
-                  key: {{ .Values.kurrier.jwt.secretKeys.anonKey }}
-            - name: SERVICE_ROLE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.jwt.secretName" . }}
-                  key: {{ .Values.kurrier.jwt.secretKeys.serviceRoleKey }}
-            # Vault
-            - name: VAULT_ENC_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.vault.secretName" . }}
-                  key: {{ .Values.kurrier.vault.secretKey }}
-            # RLS
-            - name: RLS_CLIENT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "kurrier.rls.secretName" . }}
-                  key: {{ .Values.kurrier.rls.secretKey }}
+              value: {{ include "kurrier.databaseUrl" . | quote }}
             - name: DATABASE_RLS_URL
-              value: "postgres://authenticator:$(POSTGRES_PASSWORD)@{{ include "kurrier.postgresql.host" . }}:{{ include "kurrier.postgresql.port" . }}/{{ include "kurrier.postgresql.database" . }}"
-            # Search
-            - name: SEARCH_REBUILD_ON_BOOT
-              value: "false"
-            # DAV URL (Baikal for CardDAV/CalDAV)
-            {{- if and .Values.dav.enabled .Values.dav.baikal.enabled }}
-            - name: DAV_URL
-              value: "http://{{ include "kurrier.baikal.serviceName" . }}:{{ .Values.dav.baikal.service.port }}"
-            {{- end }}
-            # WebDAV URL (for file storage)
-            {{- if .Values.webdav.enabled }}
-            - name: WEB_DAV_URL
-              value: "http://{{ include "kurrier.webdav.serviceName" . }}:{{ .Values.webdav.service.port }}"
-            {{- end }}
-            # TLS verification
-            {{- if .Values.kurrier.skipTlsVerify }}
-            - name: NODE_TLS_REJECT_UNAUTHORIZED
-              value: "0"
-            {{- end }}
-            {{- with .Values.worker.env }}
+              value: {{ include "kurrier.databaseRlsUrl" . | quote }}
+            - name: DAV_DATABASE_URL
+              value: {{ include "kurrier.baikalDatabaseUrl" . | quote }}
+            {{- with .Values.worker.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
-            {{- toYaml .Values.worker.livenessProbe | nindent 12 }}
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
           readinessProbe:
-            {{- toYaml .Values.worker.readinessProbe | nindent 12 }}
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
-          volumeMounts:
-            - name: dav-data
-              mountPath: /dav-data
-      initContainers:
-        - name: init-dav-dir
-          image: busybox:latest
-          command:
-            - sh
-            - -c
-            - |
-              mkdir -p /dav-data/db
-              chown -R 1000:1000 /dav-data
           securityContext:
-            runAsNonRoot: false
-            runAsUser: 0
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- with .Values.worker.extraVolumeMounts }}
           volumeMounts:
-            - name: dav-data
-              mountPath: /dav-data
-      volumes:
-        - name: dav-data
-          {{- if .Values.dav.worker.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "kurrier.fullname" . }}-dav-data
-          {{- else }}
-          emptyDir: {}
+            {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with .Values.worker.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.worker.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

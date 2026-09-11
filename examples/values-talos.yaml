@@ -2,26 +2,32 @@ global:
   storageClass: iscsi
 
 config:
-  webUrl: https://mail.example.com
-  davUrl: https://dav.example.com
+  webUrl: https://kurrier.vanclanjr.io
+  davUrl: https://kurrier-dav.vanclanjr.io
   disableDrive: false
   disableLocalLogin: false
 
 secrets:
   existingSecret: kurrier-secrets
 
+dav:
+  config:
+    timezone: America/New_York
+    inviteFrom: noreply@vanclanjr.io
+
 ingress:
   enabled: true
-  className: nginx
+  className: pomerium
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    cert-manager.io/cluster-issuer: step-ca-issuer
+    ingress.pomerium.io/preserve_host_header: "true"
   hosts:
-    - host: mail.example.com
+    - host: kurrier.vanclanjr.io
       paths:
         - path: /
           pathType: Prefix
           service: web
-    - host: dav.example.com
+    - host: kurrier-dav.vanclanjr.io
       paths:
         - path: /
           pathType: Prefix
@@ -29,10 +35,10 @@ ingress:
   tls:
     - secretName: kurrier-tls
       hosts:
-        - mail.example.com
+        - kurrier.vanclanjr.io
     - secretName: kurrier-dav-tls
       hosts:
-        - dav.example.com
+        - kurrier-dav.vanclanjr.io
 
 podDisruptionBudget:
   enabled: true

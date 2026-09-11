@@ -1,18 +1,15 @@
-{{- if and .Values.dav.enabled .Values.dav.worker.persistence.enabled }}
+{{- if and .Values.dav.enabled .Values.dav.persistence.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "kurrier.fullname" . }}-dav-data
+  name: {{ include "kurrier.fullname" . }}-dav-specific
   labels:
-    {{- include "kurrier.labels" . | nindent 4 }}
-    app.kubernetes.io/component: dav
+    {{- include "kurrier.componentLabels" (dict "root" . "component" "dav") | nindent 4 }}
 spec:
   accessModes:
-    {{- toYaml .Values.dav.worker.persistence.accessModes | nindent 4 }}
-  {{- if or .Values.global.storageClass .Values.dav.worker.persistence.storageClass }}
-  storageClassName: {{ .Values.dav.worker.persistence.storageClass | default .Values.global.storageClass }}
-  {{- end }}
+    {{- toYaml .Values.dav.persistence.accessModes | nindent 4 }}
+  {{- include "kurrier.storageClass" (dict "root" . "storageClass" .Values.dav.persistence.storageClass) | nindent 2 }}
   resources:
     requests:
-      storage: {{ .Values.dav.worker.persistence.size }}
+      storage: {{ .Values.dav.persistence.size }}
 {{- end }}

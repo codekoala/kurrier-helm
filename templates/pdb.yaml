@@ -1,39 +1,16 @@
 {{- if .Values.podDisruptionBudget.enabled }}
-{{- if .Values.web.enabled }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "kurrier.fullname" . }}-web
-  labels:
-    {{- include "kurrier.web.labels" . | nindent 4 }}
-spec:
-  {{- if .Values.podDisruptionBudget.minAvailable }}
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
-  {{- end }}
-  {{- if .Values.podDisruptionBudget.maxUnavailable }}
-  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
-  {{- end }}
-  selector:
-    matchLabels:
-      {{- include "kurrier.web.selectorLabels" . | nindent 6 }}
-{{- end }}
+{{- range $component := list "web" "worker" }}
 ---
-{{- if .Values.worker.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "kurrier.fullname" . }}-worker
+  name: {{ include "kurrier.fullname" $ }}-{{ $component }}
   labels:
-    {{- include "kurrier.worker.labels" . | nindent 4 }}
+    {{- include "kurrier.componentLabels" (dict "root" $ "component" $component) | nindent 4 }}
 spec:
-  {{- if .Values.podDisruptionBudget.minAvailable }}
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
-  {{- end }}
-  {{- if .Values.podDisruptionBudget.maxUnavailable }}
-  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
-  {{- end }}
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
   selector:
     matchLabels:
-      {{- include "kurrier.worker.selectorLabels" . | nindent 6 }}
+      {{- include "kurrier.componentSelectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
 {{- end }}
 {{- end }}

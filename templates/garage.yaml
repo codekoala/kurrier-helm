@@ -1,0 +1,134 @@
+{{- if .Values.garage.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kurrier.fullname" . }}-garage
+  labels:
+    {{- include "kurrier.componentLabels" (dict "root" . "component" "garage") | nindent 4 }}
+spec:
+  serviceName: {{ include "kurrier.garage.serviceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "garage") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "garage") | nindent 8 }}
+    spec:
+      {{- include "kurrier.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: garage
+          image: {{ include "kurrier.image" (dict "root" . "image" .Values.garage.image) | quote }}
+          imagePullPolicy: {{ .Values.garage.image.pullPolicy }}
+          command:
+            - /garage
+            - server
+            - --single-node
+            - --default-bucket
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: GARAGE_RPC_SECRET
+            - name: GARAGE_DEFAULT_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: GARAGE_ACCESS_KEY
+            - name: GARAGE_DEFAULT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: GARAGE_SECRET_KEY
+            - name: GARAGE_DEFAULT_BUCKET
+              value: {{ .Values.garage.bucket | quote }}
+          ports:
+            - name: s3
+              containerPort: 3900
+              protocol: TCP
+            - name: rpc
+              containerPort: 3901
+              protocol: TCP
+            - name: web
+              containerPort: 3902
+              protocol: TCP
+            - name: admin
+              containerPort: 3903
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/garage/data
+            - name: meta
+              mountPath: /var/lib/garage/meta
+          livenessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.garage.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kurrier.fullname" . }}-bootstrap
+  {{- if .Values.garage.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.garage.persistence.accessModes | nindent 10 }}
+        {{- include "kurrier.storageClass" (dict "root" . "storageClass" .Values.garage.persistence.storageClass) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.garage.persistence.dataSize }}
+    - metadata:
+        name: meta
+      spec:
+        accessModes:
+          {{- toYaml .Values.garage.persistence.accessModes | nindent 10 }}
+        {{- include "kurrier.storageClass" (dict "root" . "storageClass" .Values.garage.persistence.storageClass) | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.garage.persistence.metaSize }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kurrier.garage.serviceName" . }}
+  labels:
+    {{- include "kurrier.componentLabels" (dict "root" . "component" "garage") | nindent 4 }}
+spec:
+  type: {{ .Values.garage.service.type }}
+  ports:
+    - name: s3
+      port: {{ .Values.garage.service.s3Port }}
+      targetPort: s3
+      protocol: TCP
+    - name: rpc
+      port: {{ .Values.garage.service.rpcPort }}
+      targetPort: rpc
+      protocol: TCP
+    - name: web
+      port: {{ .Values.garage.service.webPort }}
+      targetPort: web
+      protocol: TCP
+    - name: admin
+      port: {{ .Values.garage.service.adminPort }}
+      targetPort: admin
+      protocol: TCP
+  selector:
+    {{- include "kurrier.componentSelectorLabels" (dict "root" . "component" "garage") | nindent 4 }}
+{{- end }}
