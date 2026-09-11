@@ -17,6 +17,9 @@ This chart targets the current Kurrier v4 deployment model:
 The previous chart versions modeled the old Supabase-based Kurrier stack. That
 surface has been removed in chart `0.2.0`.
 
+The chart defaults pin the upstream v4 init/migration archive while using the
+`v3.9.6` web and worker images referenced by the upstream `v4.0.0` compose file.
+
 ## Install
 
 ```bash

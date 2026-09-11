@@ -75,7 +75,7 @@ web:
   replicaCount: 1
   image:
     repository: ghcr.io/kurrier-org/kurrier-web
-    tag: "v4.0.0"
+    tag: "v3.9.6"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -99,7 +99,7 @@ worker:
   replicaCount: 1
   image:
     repository: ghcr.io/kurrier-org/kurrier-worker
-    tag: "v4.0.0"
+    tag: "v3.9.6"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
