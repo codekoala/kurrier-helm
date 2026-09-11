@@ -56,6 +56,9 @@ When `secrets.existingSecret` is set, the Secret must contain:
 
 - `POSTGRES_PASSWORD`
 - `BAIKAL_POSTGRES_PASSWORD`
+- `DATABASE_URL`
+- `DATABASE_RLS_URL`
+- `DAV_DATABASE_URL`
 - `REDIS_PASSWORD`
 - `TYPESENSE_API_KEY`
 - `JWT_SECRET`

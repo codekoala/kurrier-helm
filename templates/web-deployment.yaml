@@ -48,11 +48,20 @@ spec:
                   name: {{ include "kurrier.secretName" . }}
                   key: BAIKAL_POSTGRES_PASSWORD
             - name: DATABASE_URL
-              value: {{ include "kurrier.databaseUrl" . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: DATABASE_URL
             - name: DATABASE_RLS_URL
-              value: {{ include "kurrier.databaseRlsUrl" . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: DATABASE_RLS_URL
             - name: DAV_DATABASE_URL
-              value: {{ include "kurrier.baikalDatabaseUrl" . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kurrier.secretName" . }}
+                  key: DAV_DATABASE_URL
             {{- with .Values.web.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

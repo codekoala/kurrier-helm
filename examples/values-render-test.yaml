@@ -8,6 +8,9 @@ config:
 secrets:
   postgresPassword: test-postgres-password
   baikalPostgresPassword: test-baikal-postgres-password
+  databaseUrl: postgresql://postgres:test-postgres-password@kurrier-postgres:5432/postgres
+  databaseRlsUrl: postgresql://kurrier:test-postgres-password@kurrier-postgres:5432/postgres
+  davDatabaseUrl: postgresql://baikal:test-baikal-postgres-password@kurrier-baikal-postgres:5432/baikal
   redisPassword: test-redis-password
   typesenseApiKey: test-typesense-api-key
   jwtSecret: test-jwt-secret-at-least-32-characters
