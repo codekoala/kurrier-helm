@@ -32,6 +32,7 @@ spec:
               mkdir -p /tmp/kurrier /scripts
               tar -xzf /tmp/kurrier.tar.gz -C /tmp/kurrier --strip-components=1
               cp -R /tmp/kurrier/db/init/. /scripts/
+              sed -i 's/CREATE SCHEMA "auth";/CREATE SCHEMA IF NOT EXISTS "auth";/' /scripts/migrations/001_migration.sql
               chmod +x /scripts/db-bootstrap.sh
           volumeMounts:
             - name: scripts

@@ -88,5 +88,8 @@ Optional keys:
 - The downloader init containers use `wget --no-check-certificate` because the
   minimal Alpine downloader image does not ship a complete public CA store in
   this cluster after CA injection. The archive URL is pinned by chart values.
+- The migration Job normalizes upstream `001_migration.sql` to use
+  `CREATE SCHEMA IF NOT EXISTS "auth"` because the chart's Postgres bootstrap
+  already creates and grants the `auth` schema idempotently.
 - Stateful data restore from older Kurrier/Supabase deployments should be planned
   separately; do not mount old PVC data into this v4 chart without schema review.
